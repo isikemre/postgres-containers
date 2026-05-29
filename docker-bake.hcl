@@ -52,6 +52,15 @@ variable "pgEdition" {
   default = ""
 }
 
+// Optional extra APT repository URL that ships the edition packages.
+// Leave empty ("") for production builds using the official PGDG repository.
+// Primarily intended for local end-to-end testing of the pgEdition flow
+// against a mock repository (see test/mock-ee), e.g.
+// pgEdition=ee pgEditionRepo=http://localhost:8080 docker buildx bake ...
+variable "pgEditionRepo" {
+  default = ""
+}
+
 // Extensions to be included in the `standard` image
 extensions = [
   "pgaudit",
@@ -94,6 +103,7 @@ target "default" {
     STANDARD_ADDITIONAL_POSTGRES_PACKAGES = "${getStandardAdditionalPostgresPackagesPerMajorVersion(getMajor(pgVersion))}"
     BARMAN_VERSION = "${barmanVersion}"
     PG_EDITION = "${pgEdition}"
+    PG_EDITION_REPO = "${pgEditionRepo}"
   }
   output = [
     "type=image,oci-mediatypes=true,oci-artifact=true",

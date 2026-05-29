@@ -7,12 +7,21 @@ ARG PG_MAJOR
 # to install "postgresql-16ee" instead of the official "postgresql-16" package.
 # Leave empty to use the official PGDG packages.
 ARG PG_EDITION=""
+# Optional extra APT repository that ships the edition packages. Leave empty
+# (the default) for production builds. It is primarily intended for local
+# end-to-end testing of the PG_EDITION flow against a mock repository (see
+# test/mock-ee). When set, it must point to a flat APT repository URL.
+ARG PG_EDITION_REPO=""
 
 ENV PATH=$PATH:/usr/lib/postgresql/$PG_MAJOR/bin
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends postgresql-common ca-certificates gnupg && \
     /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y -c "${PG_MAJOR}" && \
+    if [ -n "${PG_EDITION_REPO}" ]; then \
+      echo "deb [trusted=yes] ${PG_EDITION_REPO} ./" > /etc/apt/sources.list.d/pg-edition-mock.list && \
+      apt-get update; \
+    fi && \
     apt-get install -y --no-install-recommends -o Dpkg::::="--force-confdef" -o Dpkg::::="--force-confold" postgresql-common && \
     sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf && \
     apt-get install -y --no-install-recommends \

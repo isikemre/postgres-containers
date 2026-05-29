@@ -1,0 +1,18 @@
+# Local end-to-end test harness for the PostgreSQL edition (PG_EDITION) build
+# flow. The apt-repo service builds and serves a dummy postgresql-17ee package
+# from a flat APT repository, allowing the main image build to install an
+# edition package without a real enterprise repository.
+#
+# Usage:
+#   docker compose -f test/mock-ee/docker-compose.yml up -d --build
+# The repository is then reachable at http://localhost:8080
+services:
+  apt-repo:
+    build:
+      context: ./apt-repo
+      args:
+        PG_MAJOR: "${PG_MAJOR:-17}"
+        PG_EDITION: "${PG_EDITION:-ee}"
+        PKG_VERSION: "${PKG_VERSION:-17.10}"
+    ports:
+      - "8080:8080"
