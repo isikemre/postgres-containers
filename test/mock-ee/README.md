@@ -130,12 +130,19 @@ RUN --mount=type=secret,id=pg_edition_sources1,required=false \
     ... \
     if [ -f /run/secrets/pg_edition_keyring ]; then \
       cp /run/secrets/pg_edition_keyring /usr/share/keyrings/pg-edition.gpg; \
+      chmod a+r /usr/share/keyrings/pg-edition.gpg; \
     fi && \
     if [ -f /run/secrets/pg_edition_sources1 ]; then \
       cp /run/secrets/pg_edition_sources1 /etc/apt/sources.list.d/pg-edition-1.sources; \
+      chmod a+r /etc/apt/sources.list.d/pg-edition-1.sources; \
     fi && \
     ...
 ```
+
+> **Note:** BuildKit mounts secret files with mode `0400` (root-only). The
+> copied keyring and `.sources` files are therefore made world-readable with
+> `chmod a+r`, otherwise apt's unprivileged `_apt` sandbox user cannot read the
+> keyring and verification fails with `NO_PUBKEY ... is not signed`.
 
 After installing the edition package, the injected files are removed so they
 never appear in the final image.

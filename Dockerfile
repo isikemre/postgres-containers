@@ -41,12 +41,15 @@ RUN --mount=type=secret,id=pg_edition_sources1,required=false \
     /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y -c "${PG_MAJOR}" && \
     if [ -f /run/secrets/pg_edition_keyring ]; then \
       cp /run/secrets/pg_edition_keyring /usr/share/keyrings/pg-edition.gpg; \
+      chmod a+r /usr/share/keyrings/pg-edition.gpg; \
     fi && \
     if [ -f /run/secrets/pg_edition_sources1 ]; then \
       cp /run/secrets/pg_edition_sources1 /etc/apt/sources.list.d/pg-edition-1.sources; \
+      chmod a+r /etc/apt/sources.list.d/pg-edition-1.sources; \
     fi && \
     if [ -f /run/secrets/pg_edition_sources2 ]; then \
       cp /run/secrets/pg_edition_sources2 /etc/apt/sources.list.d/pg-edition-2.sources; \
+      chmod a+r /etc/apt/sources.list.d/pg-edition-2.sources; \
     fi && \
     if [ -f /etc/apt/sources.list.d/pg-edition-1.sources ] || \
        [ -f /etc/apt/sources.list.d/pg-edition-2.sources ]; then \
