@@ -1,6 +1,8 @@
 # Mock APT repository that serves a dummy PostgreSQL edition package
 # (e.g. postgresql-17ee) over HTTP for local end-to-end build testing.
-FROM ubuntu:noble
+ARG BASE_IMAGE_PREFIX=""
+ARG BASE_IMAGE=ubuntu:noble
+FROM ${BASE_IMAGE_PREFIX}${BASE_IMAGE}
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \

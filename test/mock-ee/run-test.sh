@@ -14,6 +14,7 @@
 #   PG_EDITION  Edition suffix                         (ee)
 #   PG_VERSION  Full PostgreSQL version for the build   (17.10)
 #   PKG_VERSION Mock package version prefix             ($PG_VERSION)
+#   BASE_IMAGE_PREFIX  Optional registry/path prefix for Ubuntu base images
 #   BASE        Base image                              (ubuntu:noble)
 #   REPO_PORT   Host port for the mock repository       (8080)
 #   USE_INLINE_KEY  When set to "1", pass a .sources file with an inline
@@ -27,6 +28,7 @@ PG_MAJOR="${PG_MAJOR:-17}"
 PG_EDITION="${PG_EDITION:-ee}"
 PG_VERSION="${PG_VERSION:-17.10}"
 PKG_VERSION="${PKG_VERSION:-${PG_VERSION}}"
+BASE_IMAGE_PREFIX="${BASE_IMAGE_PREFIX:-}"
 BASE="${BASE:-ubuntu:noble}"
 REPO_PORT="${REPO_PORT:-8080}"
 USE_INLINE_KEY="${USE_INLINE_KEY:-0}"
@@ -38,6 +40,7 @@ SECRETS_DIR="$(mktemp -d)"
 
 cleanup() {
   echo "==> Tearing down mock APT repository"
+  BASE_IMAGE_PREFIX="${BASE_IMAGE_PREFIX}" \
   PG_MAJOR="${PG_MAJOR}" PG_EDITION="${PG_EDITION}" PKG_VERSION="${PKG_VERSION}" \
     REPO_URL="http://host.docker.internal:${REPO_PORT}" \
     ${COMPOSE} down --remove-orphans >/dev/null 2>&1 || true
@@ -46,6 +49,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> Starting mock APT repository (serving ${PKG}=${PKG_VERSION}*)"
+BASE_IMAGE_PREFIX="${BASE_IMAGE_PREFIX}" \
 PG_MAJOR="${PG_MAJOR}" PG_EDITION="${PG_EDITION}" PKG_VERSION="${PKG_VERSION}" \
   REPO_URL="http://host.docker.internal:${REPO_PORT}" \
   ${COMPOSE} up -d --build
@@ -81,6 +85,7 @@ echo "==> Building image with PG_EDITION=${PG_EDITION} against the mock reposito
 DOCKER_BUILDKIT=1 docker build \
   --add-host=host.docker.internal:host-gateway \
   --target minimal \
+  --build-arg "BASE_IMAGE_PREFIX=${BASE_IMAGE_PREFIX}" \
   --build-arg "BASE=${BASE}" \
   --build-arg "PG_VERSION=${PG_VERSION}" \
   --build-arg "PG_MAJOR=${PG_MAJOR}" \

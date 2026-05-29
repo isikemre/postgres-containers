@@ -59,6 +59,13 @@ USE_INLINE_KEY=1 ./test/mock-ee/run-test.sh
 PG_MAJOR=16 PG_VERSION=16.14 PG_EDITION=ee ./test/mock-ee/run-test.sh
 ```
 
+If your environment also proxies Ubuntu through an internal registry cache, set
+`BASE_IMAGE_PREFIX` as well:
+
+```bash
+BASE_IMAGE_PREFIX=registry.example.com/hub.docker.com/ ./test/mock-ee/run-test.sh
+```
+
 ## Running the mock repository on its own
 
 If you want to drive the build yourself (for example through `docker buildx
@@ -80,6 +87,7 @@ Then build with the Bake variables pointing at the extracted files:
 
 ```bash
 pgEdition=ee \
+baseImagePrefix=registry.example.com/hub.docker.com/ \
 pgEditionSources1=./mock-ee.sources \
 pgEditionKeyring=./vendor.gpg \
   docker buildx bake \
@@ -94,6 +102,7 @@ Or with plain `docker buildx build`:
 docker build \
   --add-host=host.docker.internal:host-gateway \
   --target minimal \
+  --build-arg BASE_IMAGE_PREFIX=registry.example.com/hub.docker.com/ \
   --build-arg PG_EDITION=ee \
   --build-arg PG_VERSION=17.10 \
   --build-arg PG_MAJOR=17 \

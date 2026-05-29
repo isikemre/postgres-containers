@@ -88,6 +88,19 @@ pgEdition=ee docker buildx bake --push
 
 Leave `pgEdition` empty (the default) to use the official PGDG packages.
 
+## Base Image Prefix
+
+If you need to pull upstream base images through an internal registry cache,
+set the `baseImagePrefix` Bake variable. Its value is prepended verbatim to the
+configured Ubuntu base image reference, while the default empty value keeps the
+current direct pull behavior.
+
+For example:
+
+```bash
+baseImagePrefix=registry.example.com/hub.docker.com/ docker buildx bake --push
+```
+
 ## Image Types
 
 We currently provide and maintain three main types of PostgreSQL images:

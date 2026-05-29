@@ -10,6 +10,10 @@ variable "registry" {
   default = "localhost:5000"
 }
 
+variable "baseImagePrefix" {
+  default = ""
+}
+
 // Use the revision variable to identify the commit that generated the image
 variable "revision" {
   default = ""
@@ -114,6 +118,7 @@ target "default" {
     PG_VERSION = "${pgVersion}"
     PG_MAJOR = "${getMajor(pgVersion)}"
     BASE = "${base}"
+    BASE_IMAGE_PREFIX = "${baseImagePrefix}"
     EXTENSIONS = "${getExtensionsString(pgVersion, extensions)}"
     STANDARD_ADDITIONAL_POSTGRES_PACKAGES = "${getStandardAdditionalPostgresPackagesPerMajorVersion(getMajor(pgVersion))}"
     BARMAN_VERSION = "${barmanVersion}"
@@ -146,7 +151,7 @@ target "default" {
     "index,manifest:org.opencontainers.image.documentation=${url}",
     "index,manifest:org.opencontainers.image.authors=${authors}",
     "index,manifest:org.opencontainers.image.licenses=Apache-2.0",
-    "index,manifest:org.opencontainers.image.base.name=docker.io/library/ubuntu:${tag(base)}",
+    "index,manifest:org.opencontainers.image.base.name=${prefixBaseImage(baseImagePrefix, stripDigest(base))}",
     "index,manifest:org.opencontainers.image.base.digest=${digest(base)}"
   ]
   labels = {
@@ -161,9 +166,14 @@ target "default" {
     "org.opencontainers.image.documentation" = "${url}",
     "org.opencontainers.image.authors" = "${authors}",
     "org.opencontainers.image.licenses" = "Apache-2.0"
-    "org.opencontainers.image.base.name" = "docker.io/library/ubuntu:${tag(base)}"
+    "org.opencontainers.image.base.name" = "${prefixBaseImage(baseImagePrefix, stripDigest(base))}"
     "org.opencontainers.image.base.digest" = "${digest(base)}"
   }
+}
+
+function stripDigest {
+  params = [ imageNameWithSha ]
+  result = index(split("@", imageNameWithSha), 0)
 }
 
 function tag {
@@ -179,6 +189,11 @@ function distroVersion {
 function digest {
   params = [ imageNameWithSha ]
   result = index(split("@", imageNameWithSha), 1)
+}
+
+function prefixBaseImage {
+  params = [ prefix, imageName ]
+  result = prefix == "" ? imageName : "${prefix}${imageName}"
 }
 
 function cleanVersion {

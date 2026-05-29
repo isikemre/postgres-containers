@@ -161,6 +161,30 @@ for details.
 
 Leave `pgEdition` empty (the default) to use the official PGDG packages.
 
+## Base Image Prefix
+
+If your environment must pull upstream base images through a registry cache or
+proxy, set the `baseImagePrefix` Bake variable. Its value is prepended verbatim
+to the configured Ubuntu base image reference. Leave it empty (the default) to
+pull the upstream image directly.
+
+For example, the default `ubuntu:noble@...` base can be resolved through an
+internal registry cache like this:
+
+```bash
+baseImagePrefix=registry.example.com/hub.docker.com/ docker buildx bake --push
+```
+
+With plain `docker build`, pass the matching Dockerfile build argument:
+
+```bash
+docker build \
+  --build-arg BASE_IMAGE_PREFIX=registry.example.com/hub.docker.com/ \
+  --build-arg PG_VERSION=17.10 \
+  --build-arg PG_MAJOR=17 \
+  .
+```
+
 ## The Distribution Registry
 
 The images must be pushed to any registry server that complies with the **OCI
