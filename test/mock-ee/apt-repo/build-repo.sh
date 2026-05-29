@@ -24,7 +24,7 @@ set -eu
 PG_MAJOR="${PG_MAJOR:-17}"
 PG_EDITION="${PG_EDITION:-ee}"
 PKG_VERSION="${PKG_VERSION:-17.10}"
-REPO_DIR="${REPO_DIR:-/repo}"
+REPO_DIR="${REPO_DIR:-./repo}"
 REPO_URL="${REPO_URL:-http://host.docker.internal:8080}"
 
 PKG="postgresql-${PG_MAJOR}${PG_EDITION}"
