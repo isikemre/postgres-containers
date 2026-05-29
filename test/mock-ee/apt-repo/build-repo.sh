@@ -15,7 +15,7 @@
 #   PG_EDITION  Edition suffix appended to the package name (default: ee)
 #   PKG_VERSION Package version prefix, must match the build's PG_VERSION
 #               (default: 17.10)
-#   REPO_DIR    Output directory for the repository (default: /repo)
+#   REPO_DIR    Output directory for the repository (default: ./repo)
 #   REPO_URL    URL at which the repository will be reachable (default:
 #               http://host.docker.internal:8080). Embedded in the generated
 #               .sources file.
