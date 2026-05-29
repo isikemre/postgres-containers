@@ -79,6 +79,13 @@ To build images using the `ee` edition packages:
 pgEdition=ee docker buildx bake --push
 ```
 
+> **NOTE:** Edition packages such as `ee` are **not** part of the official
+> PGDG repository (`apt.postgresql.org`). Before building with a non-empty
+> `pgEdition`, make sure the APT repository that provides those packages is
+> reachable from the build environment and, if it requires additional sources
+> or authentication, that the `Dockerfile` is adjusted to configure it.
+> Otherwise the build will fail with a *package-not-found* error.
+
 Leave `pgEdition` empty (the default) to use the official PGDG packages.
 
 ## Image Types

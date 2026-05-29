@@ -109,6 +109,13 @@ enterprise edition packages `postgresql-16ee`, `postgresql-17ee` and
 pgEdition=ee docker buildx bake --push
 ```
 
+> **NOTE:** Edition packages such as `ee` are **not** provided by the official
+> PGDG repository (`apt.postgresql.org`). Before building with a non-empty
+> `pgEdition`, ensure the APT repository that ships those packages is reachable
+> from the build environment and, if it requires extra sources or
+> authentication, adjust the `Dockerfile` to configure it. Otherwise the build
+> will fail with a *package-not-found* error.
+
 Leave `pgEdition` empty (the default) to use the official PGDG packages.
 
 ## The Distribution Registry

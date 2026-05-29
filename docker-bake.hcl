@@ -41,8 +41,13 @@ barmanVersion = "3.19.1"
 
 // Optional suffix appended to the PostgreSQL APT package name.
 // Leave empty ("") to install the official PGDG packages (e.g. postgresql-16).
-// Set to "ee" to install the enterprise edition packages instead
+// Set to "ee" to install enterprise edition packages instead
 // (e.g. postgresql-16ee, postgresql-17ee, postgresql-18ee).
+// NOTE: edition packages such as "ee" are NOT provided by the official PGDG
+// repository (apt.postgresql.org). The corresponding APT repository must be
+// reachable from the build (and configured in the Dockerfile if it requires
+// extra sources or authentication), otherwise the build fails with a
+// package-not-found error.
 variable "pgEdition" {
   default = ""
 }
