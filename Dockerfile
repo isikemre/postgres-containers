@@ -8,9 +8,10 @@ ARG PG_MAJOR
 # Leave empty to use the official PGDG packages.
 ARG PG_EDITION=""
 # Optional extra APT repository that ships the edition packages. Leave empty
-# (the default) for production builds. It is primarily intended for local
-# end-to-end testing of the PG_EDITION flow against a mock repository (see
-# test/mock-ee). When set, it must point to a flat APT repository URL.
+# (the default) for production builds. It is intended ONLY for local end-to-end
+# testing of the PG_EDITION flow against a mock repository (see test/mock-ee).
+# When set, the repository is trusted without GPG verification ([trusted=yes]),
+# so it MUST NOT be used with production or untrusted repositories.
 ARG PG_EDITION_REPO=""
 
 ENV PATH=$PATH:/usr/lib/postgresql/$PG_MAJOR/bin
