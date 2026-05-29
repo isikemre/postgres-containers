@@ -7,20 +7,49 @@ ARG PG_MAJOR
 # to install "postgresql-16ee" instead of the official "postgresql-16" package.
 # Leave empty to use the official PGDG packages.
 ARG PG_EDITION=""
-# Optional extra APT repository that ships the edition packages. Leave empty
-# (the default) for production builds. It is intended ONLY for local end-to-end
-# testing of the PG_EDITION flow against a mock repository (see test/mock-ee).
-# When set, the repository is trusted without GPG verification ([trusted=yes]),
-# so it MUST NOT be used with production or untrusted repositories.
-ARG PG_EDITION_REPO=""
 
 ENV PATH=$PATH:/usr/lib/postgresql/$PG_MAJOR/bin
 
-RUN apt-get update && \
+# The edition APT sources and keyring are injected via BuildKit secret mounts
+# so they never leak into the image history. Three optional secrets are
+# supported:
+#
+#   pg_edition_sources1  – first  deb822 .sources file
+#   pg_edition_sources2  – second deb822 .sources file
+#   pg_edition_keyring   – GPG keyring referenced by Signed-By in a .sources
+#
+# Only the secrets that are actually provided are installed. Sources that embed
+# the signing key inline (Signed-By: + BEGIN PGP PUBLIC KEY BLOCK) do not need
+# the keyring. After the edition package is installed every injected file is
+# removed so the final image stays clean.
+#
+# Usage with plain docker build:
+#   docker build \
+#     --secret id=pg_edition_sources1,src=vendor-main.sources \
+#     --secret id=pg_edition_sources2,src=vendor-updates.sources \
+#     --secret id=pg_edition_keyring,src=vendor.gpg \
+#     --build-arg PG_EDITION=ee ...
+#
+# Usage with docker buildx bake: see the secret block in docker-bake.hcl.
+
+RUN --mount=type=secret,id=pg_edition_sources1,required=false \
+    --mount=type=secret,id=pg_edition_sources2,required=false \
+    --mount=type=secret,id=pg_edition_keyring,required=false \
+    set -eux && \
+    apt-get update && \
     apt-get install -y --no-install-recommends postgresql-common ca-certificates gnupg && \
     /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y -c "${PG_MAJOR}" && \
-    if [ -n "${PG_EDITION_REPO}" ]; then \
-      echo "deb [trusted=yes] ${PG_EDITION_REPO} ./" > /etc/apt/sources.list.d/pg-edition-mock.list && \
+    if [ -f /run/secrets/pg_edition_keyring ]; then \
+      cp /run/secrets/pg_edition_keyring /usr/share/keyrings/pg-edition.gpg; \
+    fi && \
+    if [ -f /run/secrets/pg_edition_sources1 ]; then \
+      cp /run/secrets/pg_edition_sources1 /etc/apt/sources.list.d/pg-edition-1.sources; \
+    fi && \
+    if [ -f /run/secrets/pg_edition_sources2 ]; then \
+      cp /run/secrets/pg_edition_sources2 /etc/apt/sources.list.d/pg-edition-2.sources; \
+    fi && \
+    if [ -f /etc/apt/sources.list.d/pg-edition-1.sources ] || \
+       [ -f /etc/apt/sources.list.d/pg-edition-2.sources ]; then \
       apt-get update; \
     fi && \
     apt-get install -y --no-install-recommends -o Dpkg::::="--force-confdef" -o Dpkg::::="--force-confold" postgresql-common && \
@@ -28,6 +57,9 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       libsasl2-modules libldap-common \
       -o Dpkg::::="--force-confdef" -o Dpkg::::="--force-confold" "postgresql-${PG_MAJOR}${PG_EDITION}=${PG_VERSION}*" && \
+    rm -f /etc/apt/sources.list.d/pg-edition-1.sources \
+          /etc/apt/sources.list.d/pg-edition-2.sources \
+          /usr/share/keyrings/pg-edition.gpg && \
     apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false && \
     rm -rf /var/lib/apt/lists/* /var/cache/* /var/log/*
 

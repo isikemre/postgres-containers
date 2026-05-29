@@ -45,19 +45,34 @@ barmanVersion = "3.19.1"
 // (e.g. postgresql-16ee, postgresql-17ee, postgresql-18ee).
 // NOTE: edition packages such as "ee" are NOT provided by the official PGDG
 // repository (apt.postgresql.org). The corresponding APT repository must be
-// reachable from the build (and configured in the Dockerfile if it requires
-// extra sources or authentication), otherwise the build fails with a
-// package-not-found error.
+// reachable from the build and its configuration passed as BuildKit secrets
+// (see below), otherwise the build fails with a package-not-found error.
 variable "pgEdition" {
   default = ""
 }
 
-// Optional extra APT repository URL that ships the edition packages.
-// Leave empty ("") for production builds using the official PGDG repository.
-// Primarily intended for local end-to-end testing of the pgEdition flow
-// against a mock repository (see test/mock-ee), e.g.
-// pgEdition=ee pgEditionRepo=http://localhost:8080 docker buildx bake ...
-variable "pgEditionRepo" {
+// Paths to optional APT sources / keyring files for the edition repository.
+// These are injected into the build as BuildKit secrets and never appear in
+// the image history or layers. Leave them empty ("") for official PGDG builds.
+//
+// pgEditionSources1: deb822 .sources file for the primary edition repository.
+// pgEditionSources2: deb822 .sources file for a second edition repository.
+// pgEditionKeyring:  GPG keyring referenced by Signed-By in a .sources file.
+//                    Not needed when the .sources embeds the key inline.
+//
+// Example:
+//   pgEdition=ee \
+//   pgEditionSources1=vendor-main.sources \
+//   pgEditionSources2=vendor-updates.sources \
+//   pgEditionKeyring=vendor.gpg \
+//     docker buildx bake --push
+variable "pgEditionSources1" {
+  default = ""
+}
+variable "pgEditionSources2" {
+  default = ""
+}
+variable "pgEditionKeyring" {
   default = ""
 }
 
@@ -103,8 +118,15 @@ target "default" {
     STANDARD_ADDITIONAL_POSTGRES_PACKAGES = "${getStandardAdditionalPostgresPackagesPerMajorVersion(getMajor(pgVersion))}"
     BARMAN_VERSION = "${barmanVersion}"
     PG_EDITION = "${pgEdition}"
-    PG_EDITION_REPO = "${pgEditionRepo}"
   }
+  // Edition APT sources and keyring are injected as BuildKit secrets so they
+  // never leak into the image history. Each secret is only included when its
+  // corresponding variable points to a real file.
+  secret = compact([
+    pgEditionSources1 != "" ? "id=pg_edition_sources1,src=${pgEditionSources1}" : "",
+    pgEditionSources2 != "" ? "id=pg_edition_sources2,src=${pgEditionSources2}" : "",
+    pgEditionKeyring  != "" ? "id=pg_edition_keyring,src=${pgEditionKeyring}"    : "",
+  ])
   output = [
     "type=image,oci-mediatypes=true,oci-artifact=true",
   ]

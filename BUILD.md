@@ -103,18 +103,61 @@ To install an alternative edition, set the `pgEdition` Bake variable. Its value
 is appended as a suffix to the PostgreSQL package name through the `PG_EDITION`
 Dockerfile build argument. For example, setting `pgEdition=ee` installs the
 enterprise edition packages `postgresql-16ee`, `postgresql-17ee` and
-`postgresql-18ee` instead of the official ones:
+`postgresql-18ee` instead of the official ones.
+
+### Configuring the edition APT repository
+
+Edition packages such as `ee` are **not** provided by the official PGDG
+repository (`apt.postgresql.org`). The APT configuration for the vendor
+repository is injected into the build as **BuildKit secret mounts** so that
+`.sources` files and GPG keyrings never leak into the image history.
+
+Three optional secrets are supported:
+
+| Bake variable | Secret ID | Purpose |
+| --- | --- | --- |
+| `pgEditionSources1` | `pg_edition_sources1` | First deb822 `.sources` file |
+| `pgEditionSources2` | `pg_edition_sources2` | Second deb822 `.sources` file |
+| `pgEditionKeyring` | `pg_edition_keyring` | GPG keyring referenced by `Signed-By:` in a `.sources` file |
+
+If a `.sources` file already embeds the signing key inline (the `Signed-By:`
+field contains a `BEGIN PGP PUBLIC KEY BLOCK`), the separate keyring secret is
+not needed for that source.
+
+#### Using `docker buildx bake`
+
+Point the Bake variables at the files on the host:
 
 ```bash
-pgEdition=ee docker buildx bake --push
+pgEdition=ee \
+pgEditionSources1=vendor-main.sources \
+pgEditionSources2=vendor-updates.sources \
+pgEditionKeyring=vendor.gpg \
+  docker buildx bake --push
 ```
 
-> **NOTE:** Edition packages such as `ee` are **not** provided by the official
-> PGDG repository (`apt.postgresql.org`). Before building with a non-empty
-> `pgEdition`, ensure the APT repository that ships those packages is reachable
-> from the build environment and, if it requires extra sources or
-> authentication, adjust the `Dockerfile` to configure it. Otherwise the build
-> will fail with a *package-not-found* error.
+#### Using plain `docker build`
+
+Pass the files with `--secret`:
+
+```bash
+docker build \
+  --secret id=pg_edition_sources1,src=vendor-main.sources \
+  --secret id=pg_edition_sources2,src=vendor-updates.sources \
+  --secret id=pg_edition_keyring,src=vendor.gpg \
+  --build-arg PG_EDITION=ee \
+  --build-arg PG_VERSION=17.10 \
+  --build-arg PG_MAJOR=17 \
+  .
+```
+
+### Local end-to-end testing
+
+A mock APT repository harness is included in [`test/mock-ee/`](test/mock-ee/).
+It generates a dummy edition package, signs it with a throwaway GPG key, and
+serves it over HTTP — letting you exercise the full build flow without access to
+a real vendor repository. See the [mock harness README](test/mock-ee/README.md)
+for details.
 
 Leave `pgEdition` empty (the default) to use the official PGDG packages.
 
