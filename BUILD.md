@@ -73,10 +73,10 @@ docker buildx bake --push
 
 If you want to limit the build to a specific combination, you can specify the
 target in the `VERSION-TYPE-BASE` format. For example, to build an image for
-PostgreSQL 17 with the `minimal` format on the `trixie` base image:
+PostgreSQL 17 with the `minimal` format on the `noble` base image:
 
 ```bash
-docker buildx bake --push postgresql-17-minimal-trixie
+docker buildx bake --push postgresql-17-minimal-noble
 ```
 
 You can also limit the build to a single platform, for example AMD64, with:
@@ -90,8 +90,26 @@ The two can be mixed as well:
 ```bash
 docker buildx bake --push \
   --set "*.platform=linux/amd64" \
-  postgresql-17-minimal-trixie
+  postgresql-17-minimal-noble
 ```
+
+## PostgreSQL Editions
+
+By default the build installs the official PostgreSQL APT packages
+(e.g. `postgresql-17`) maintained by the PostgreSQL Global Development Group
+(PGDG).
+
+To install an alternative edition, set the `pgEdition` Bake variable. Its value
+is appended as a suffix to the PostgreSQL package name through the `PG_EDITION`
+Dockerfile build argument. For example, setting `pgEdition=ee` installs the
+enterprise edition packages `postgresql-16ee`, `postgresql-17ee` and
+`postgresql-18ee` instead of the official ones:
+
+```bash
+pgEdition=ee docker buildx bake --push
+```
+
+Leave `pgEdition` empty (the default) to use the official PGDG packages.
 
 ## The Distribution Registry
 

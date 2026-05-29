@@ -39,6 +39,14 @@ postgreSQLPreviewVersions = [
 // renovate: datasource=pypi versioning=loose depName=barman
 barmanVersion = "3.19.1"
 
+// Optional suffix appended to the PostgreSQL APT package name.
+// Leave empty ("") to install the official PGDG packages (e.g. postgresql-16).
+// Set to "ee" to install the enterprise edition packages instead
+// (e.g. postgresql-16ee, postgresql-17ee, postgresql-18ee).
+variable "pgEdition" {
+  default = ""
+}
+
 // Extensions to be included in the `standard` image
 extensions = [
   "pgaudit",
@@ -57,11 +65,7 @@ target "default" {
     pgVersion = getPgVersions(postgreSQLVersions, postgreSQLPreviewVersions)
     base = [
       // renovate: datasource=docker versioning=loose
-      "debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8",
-      // renovate: datasource=docker versioning=loose
-      "debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb",
-      // renovate: datasource=docker versioning=loose
-      "debian:bullseye-slim@sha256:cd1bc32f233a49f1b82149c9edb8ef34fb1e6c45f37211445c51a97603468604"
+      "ubuntu:noble@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b"
     ]
   }
   platforms = [
@@ -84,6 +88,7 @@ target "default" {
     EXTENSIONS = "${getExtensionsString(pgVersion, extensions)}"
     STANDARD_ADDITIONAL_POSTGRES_PACKAGES = "${getStandardAdditionalPostgresPackagesPerMajorVersion(getMajor(pgVersion))}"
     BARMAN_VERSION = "${barmanVersion}"
+    PG_EDITION = "${pgEdition}"
   }
   output = [
     "type=image,oci-mediatypes=true,oci-artifact=true",
@@ -104,7 +109,7 @@ target "default" {
     "index,manifest:org.opencontainers.image.documentation=${url}",
     "index,manifest:org.opencontainers.image.authors=${authors}",
     "index,manifest:org.opencontainers.image.licenses=Apache-2.0",
-    "index,manifest:org.opencontainers.image.base.name=docker.io/library/debian:${tag(base)}",
+    "index,manifest:org.opencontainers.image.base.name=docker.io/library/ubuntu:${tag(base)}",
     "index,manifest:org.opencontainers.image.base.digest=${digest(base)}"
   ]
   labels = {
@@ -119,7 +124,7 @@ target "default" {
     "org.opencontainers.image.documentation" = "${url}",
     "org.opencontainers.image.authors" = "${authors}",
     "org.opencontainers.image.licenses" = "Apache-2.0"
-    "org.opencontainers.image.base.name" = "docker.io/library/debian:${tag(base)}"
+    "org.opencontainers.image.base.name" = "docker.io/library/ubuntu:${tag(base)}"
     "org.opencontainers.image.base.digest" = "${digest(base)}"
   }
 }

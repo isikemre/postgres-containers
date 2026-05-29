@@ -1,8 +1,12 @@
-ARG BASE=debian:trixie-slim@sha256:9b6ccd28f4913155f35e10ecd4437347d86ebce4ecf5853b3568141468faec56
+ARG BASE=ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b
 FROM $BASE AS minimal
 
 ARG PG_VERSION
 ARG PG_MAJOR
+# Optional suffix appended to the PostgreSQL APT package name, e.g. set to "ee"
+# to install "postgresql-16ee" instead of the official "postgresql-16" package.
+# Leave empty to use the official PGDG packages.
+ARG PG_EDITION=""
 
 ENV PATH=$PATH:/usr/lib/postgresql/$PG_MAJOR/bin
 
@@ -13,7 +17,7 @@ RUN apt-get update && \
     sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf && \
     apt-get install -y --no-install-recommends \
       libsasl2-modules libldap-common \
-      -o Dpkg::::="--force-confdef" -o Dpkg::::="--force-confold" "postgresql-${PG_MAJOR}=${PG_VERSION}*" && \
+      -o Dpkg::::="--force-confdef" -o Dpkg::::="--force-confold" "postgresql-${PG_MAJOR}${PG_EDITION}=${PG_VERSION}*" && \
     apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false && \
     rm -rf /var/lib/apt/lists/* /var/cache/* /var/log/*
 
@@ -35,7 +39,8 @@ USER 26
 FROM standard AS system
 ARG BARMAN_VERSION
 
-# We need to break the system packages to install barman-cloud in bookworm and later
+# We need to break the system packages to install barman-cloud on
+# externally-managed environments such as Ubuntu 24.04 (and Debian bookworm and later)
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 USER root

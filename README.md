@@ -5,7 +5,7 @@
 > has discontinued support for Debian `bullseye`.
 > In response, the CloudNativePG project has completed the transition to the
 > new `bake`-based build process for all `system` images. We now build directly
-> on top of the official Debian slim images, fully detaching from the official
+> on top of the official Ubuntu images, fully detaching from the official
 > Postgres image.
 
 ---
@@ -33,7 +33,7 @@ environments, and are not intended for standalone use.
 
 CloudNativePG PostgreSQL container images:
 
-- Are built on top of **Debian Linux** (`stable` and `oldstable`).
+- Are built on top of **Ubuntu 24.04 LTS** (`noble`).
 - Provide **multi-architecture support**, including `linux/amd64` and
   `linux/arm64`.
 - Ship with **build attestations**, such as Software Bills of Materials (SBOMs)
@@ -42,27 +42,44 @@ CloudNativePG PostgreSQL container images:
 - Are **automatically rebuilt every week** (on Mondays) to remain up to date
   with the latest upstream security and bug fixes.
 
-## Debian Releases
+## Ubuntu Releases
 
-CloudNativePG PostgreSQL container images are based on the official `stable`
-and `oldstable` Debian releases, maintained and supported by the
-[Debian Project](https://www.debian.org/releases/).
+CloudNativePG PostgreSQL container images are based on the official
+[Ubuntu 24.04 LTS (`noble`)](https://releases.ubuntu.com/24.04/) release,
+maintained and supported by [Canonical](https://ubuntu.com/about/release-cycle).
 
-The table below summarises the support lifecycle of relevant Debian versions,
-including End-of-Life (EOL) and Long-Term Support (LTS) dates.
+The table below summarises the support lifecycle of the relevant Ubuntu
+version, including its End-of-Standard-Support and Long-Term Support (LTS)
+dates.
 
-| Name                      | Version | Release Date |     EOL    |     LTS    |   Status   |
-| ------------------------- | :-----: | :----------: | :--------: | :--------: | :--------- |
-| Trixie (`stable`)         |    13   |  2025-08-09  | 2028-08-09 | 2030-06-30 | Supported  |
-| Bookworm (`oldstable`)    |    12   |  2023-06-10  | 2026-06-10 | 2028-06-30 | Supported  |
-| Bullseye (`oldoldstable`) |    11   |  2021-08-14  | 2024-08-14 | 2026-08-31 | Deprecated |
+| Name              | Version | Release Date |  Standard Support  |    LTS / ESM    |   Status   |
+| ----------------- | :-----: | :----------: | :----------------: | :-------------: | :--------- |
+| Noble Numbat      |  24.04  |  2024-04-25  |     2029-05-31     |   2036-04-25    | Supported  |
 
 > **IMPORTANT:** The CloudNativePG project provides full support for
-> Debian-based images until each release reaches its official End-of-Life
-> (EOL). After EOL and until the start of Long-Term Support (LTS), images for the
-> deprecated releases, such as `oldoldstable`, are maintained on a
-> **best-effort basis**. If discontinuation becomes necessary before the LTS
-> date, a minimum **three-month advance notice** will be posted on this page.
+> Ubuntu-based images until the underlying Ubuntu release reaches the end of its
+> standard support window.
+
+## PostgreSQL Editions
+
+By default, the images install the official PostgreSQL APT packages
+(e.g. `postgresql-16`) maintained by the PostgreSQL Global Development Group
+(PGDG).
+
+The build process can optionally install an alternative *edition* of the
+PostgreSQL packages by appending a suffix to the package name. This is
+controlled by the `pgEdition` Bake variable (mapped to the `PG_EDITION`
+Dockerfile build argument). For example, setting `pgEdition=ee` installs the
+enterprise edition packages `postgresql-16ee`, `postgresql-17ee` and
+`postgresql-18ee` instead of the official ones.
+
+To build images using the `ee` edition packages:
+
+```bash
+pgEdition=ee docker buildx bake --push
+```
+
+Leave `pgEdition` empty (the default) to use the official PGDG packages.
 
 ## Image Types
 
@@ -81,12 +98,12 @@ Barman Cloud binaries.
 ### Minimal Images
 
 Minimal images are lightweight and built on top of the
-[official Debian images](https://hub.docker.com/_/debian).
+[official Ubuntu images](https://hub.docker.com/_/ubuntu).
 They use the [APT PostgreSQL packages](https://wiki.postgresql.org/wiki/Apt)
 maintained by the PostgreSQL Global Development Group (PGDG).
 
 These images are identified by the inclusion of `minimal` in their tag names,
-for example: `17.6-minimal-trixie`.
+for example: `17.6-minimal-noble`.
 
 > [!NOTE]
 > Starting with PostgreSQL 18, `minimal` images will **not** include
@@ -110,7 +127,7 @@ following additional features:
     package
 
 Standard images are identifiable by the `standard` tag in their names, such as:
-`17.6-standard-trixie`.
+`17.6-standard-noble`.
 
 > [!NOTE] 
 > Standard images are designed to offer functionality equivalent to
@@ -144,9 +161,9 @@ where:
 - `mm` is the PostgreSQL minor version (e.g. `10`)
 - `TS` is the build timestamp with minute precision (e.g. `202509090953`)
 - `TYPE` is image type (e.g. `minimal`)
-- `OS` is the underlying distribution (e.g. `trixie`)
+- `OS` is the underlying distribution (e.g. `noble`)
 
-For example: `16.10-202509090953-minimal-trixie`.
+For example: `16.10-202509090953-minimal-noble`.
 
 ### Rolling Tags
 
@@ -154,11 +171,11 @@ In addition to fully qualified tags, rolling tags are available in the
 following formats:
 
 - `MM.mm-TYPE-OS`: latest image for a given PostgreSQL *minor* version
-  (`16.10`) of a specific type (`minimal`) on a Debian version (`trixie`).
-  For example: `16.10-minimal-trixie`.
+  (`16.10`) of a specific type (`minimal`) on an Ubuntu version (`noble`).
+  For example: `16.10-minimal-noble`.
 - `MM-TYPE-OS`: latest image for a given PostgreSQL *major* version (`16`) of
-  a specific type (`minimal`) on a Debian version (`trixie`).
-  For example: `16-minimal-trixie`.
+  a specific type (`minimal`) on an Ubuntu version (`noble`).
+  For example: `16-minimal-noble`.
 
 ### Recommendation
 
@@ -179,7 +196,7 @@ tags:
 **IMPORTANT:** These tags are **deprecated** and will be **removed when
 `bullseye` images reach end of life**. Please migrate to one of the supported
 tag formats that explicitly include both the **image type** and the
-**distribution version** (e.g. `16.10-minimal-trixie`).
+**distribution version** (e.g. `16.10-minimal-noble`).
 
 ## Image Catalogs
 
@@ -280,7 +297,7 @@ The example below uses [JSON5](https://json5.org/); save it as `renovate.json5`,
         'imageName: (?<depName>[^\\s:]+):(?<currentValue>[^\\s@]+)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?',
       ],
       datasourceTemplate: 'docker',
-      // matches: 17.6-202509151215-minimal-trixie
+      // matches: 17.6-202509151215-minimal-noble
       versioningTemplate: 'regex:^(?<major>\\d+)\\.(?<minor>\\d+)-(?<patch>\\d+)-(?<compatibility>\\S+)$',
       autoReplaceStringTemplate: 'imageName: {{{depName}}}:{{{newValue}}}{{#if newDigest}}@{{{newDigest}}}{{/if}}',
     }
@@ -295,8 +312,8 @@ The example below uses [JSON5](https://json5.org/); save it as `renovate.json5`,
 }
 ```
 
-Renovate will never change the `compatibility` part of the tag (image flavour and Debian base, e.g. `system-bookworm`), so upgrades stay on the same OS and glibc/ICU.
-Switching to a different base (e.g. from `bookworm` to `trixie`) is a manual operation because of [PostgreSQL locale-data implications](https://wiki.postgresql.org/wiki/Locale_data_changes).
+Renovate will never change the `compatibility` part of the tag (image flavour and Ubuntu base, e.g. `standard-noble`), so upgrades stay on the same OS and glibc/ICU.
+Switching to a different base (e.g. to a future Ubuntu release) is a manual operation because of [PostgreSQL locale-data implications](https://wiki.postgresql.org/wiki/Locale_data_changes).
 PostgreSQL major-version updates are routed through the [dependency dashboard](https://docs.renovatebot.com/key-concepts/dashboard/) so they can be planned and applied by a human.
 To keep references fully reproducible, you can also enable [`pinDigests`](https://docs.renovatebot.com/configuration-options/#pindigests) scoped to the CloudNativePG image.
 If your repository contains other YAML manifests, narrow `managerFilePatterns` to the directory holding your `Cluster` resources, e.g. `'/clusters/.*\\.yaml$/'`.
