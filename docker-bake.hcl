@@ -10,6 +10,10 @@ variable "registry" {
   default = "localhost:5000"
 }
 
+variable "baseImagePrefix" {
+  default = ""
+}
+
 // Use the revision variable to identify the commit that generated the image
 variable "revision" {
   default = ""
@@ -39,6 +43,43 @@ postgreSQLPreviewVersions = [
 // renovate: datasource=pypi versioning=loose depName=barman
 barmanVersion = "3.19.1"
 
+// Optional suffix appended to the PostgreSQL APT package name.
+// Leave empty ("") to install the official PGDG packages (e.g. postgresql-16).
+// Set to "ee" to install enterprise edition packages instead
+// (e.g. postgresql-16ee, postgresql-17ee, postgresql-18ee).
+// NOTE: edition packages such as "ee" are NOT provided by the official PGDG
+// repository (apt.postgresql.org). The corresponding APT repository must be
+// reachable from the build and its configuration passed as BuildKit secrets
+// (see below), otherwise the build fails with a package-not-found error.
+variable "pgEdition" {
+  default = ""
+}
+
+// Paths to optional APT sources / keyring files for the edition repository.
+// These are injected into the build as BuildKit secrets and never appear in
+// the image history or layers. Leave them empty ("") for official PGDG builds.
+//
+// pgEditionSources1: deb822 .sources file for the primary edition repository.
+// pgEditionSources2: deb822 .sources file for a second edition repository.
+// pgEditionKeyring:  GPG keyring referenced by Signed-By in a .sources file.
+//                    Not needed when the .sources embeds the key inline.
+//
+// Example:
+//   pgEdition=ee \
+//   pgEditionSources1=vendor-main.sources \
+//   pgEditionSources2=vendor-updates.sources \
+//   pgEditionKeyring=vendor.gpg \
+//     docker buildx bake --push
+variable "pgEditionSources1" {
+  default = ""
+}
+variable "pgEditionSources2" {
+  default = ""
+}
+variable "pgEditionKeyring" {
+  default = ""
+}
+
 // Extensions to be included in the `standard` image
 extensions = [
   "pgaudit",
@@ -57,11 +98,7 @@ target "default" {
     pgVersion = getPgVersions(postgreSQLVersions, postgreSQLPreviewVersions)
     base = [
       // renovate: datasource=docker versioning=loose
-      "debian:trixie-slim@sha256:b6e2a152f22a40ff69d92cb397223c906017e1391a73c952b588e51af8883bf8",
-      // renovate: datasource=docker versioning=loose
-      "debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb",
-      // renovate: datasource=docker versioning=loose
-      "debian:bullseye-slim@sha256:cd1bc32f233a49f1b82149c9edb8ef34fb1e6c45f37211445c51a97603468604"
+      "ubuntu:noble@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b"
     ]
   }
   platforms = [
@@ -81,10 +118,20 @@ target "default" {
     PG_VERSION = "${pgVersion}"
     PG_MAJOR = "${getMajor(pgVersion)}"
     BASE = "${base}"
+    BASE_IMAGE_PREFIX = "${baseImagePrefix}"
     EXTENSIONS = "${getExtensionsString(pgVersion, extensions)}"
     STANDARD_ADDITIONAL_POSTGRES_PACKAGES = "${getStandardAdditionalPostgresPackagesPerMajorVersion(getMajor(pgVersion))}"
     BARMAN_VERSION = "${barmanVersion}"
+    PG_EDITION = "${pgEdition}"
   }
+  // Edition APT sources and keyring are injected as BuildKit secrets so they
+  // never leak into the image history. Each secret is only included when its
+  // corresponding variable points to a real file.
+  secret = compact([
+    pgEditionSources1 != "" ? "id=pg_edition_sources1,src=${pgEditionSources1}" : "",
+    pgEditionSources2 != "" ? "id=pg_edition_sources2,src=${pgEditionSources2}" : "",
+    pgEditionKeyring  != "" ? "id=pg_edition_keyring,src=${pgEditionKeyring}"    : "",
+  ])
   output = [
     "type=image,oci-mediatypes=true,oci-artifact=true",
   ]
@@ -104,7 +151,7 @@ target "default" {
     "index,manifest:org.opencontainers.image.documentation=${url}",
     "index,manifest:org.opencontainers.image.authors=${authors}",
     "index,manifest:org.opencontainers.image.licenses=Apache-2.0",
-    "index,manifest:org.opencontainers.image.base.name=docker.io/library/debian:${tag(base)}",
+    "index,manifest:org.opencontainers.image.base.name=${prefixBaseImage(baseImagePrefix, stripDigest(base))}",
     "index,manifest:org.opencontainers.image.base.digest=${digest(base)}"
   ]
   labels = {
@@ -119,9 +166,14 @@ target "default" {
     "org.opencontainers.image.documentation" = "${url}",
     "org.opencontainers.image.authors" = "${authors}",
     "org.opencontainers.image.licenses" = "Apache-2.0"
-    "org.opencontainers.image.base.name" = "docker.io/library/debian:${tag(base)}"
+    "org.opencontainers.image.base.name" = "${prefixBaseImage(baseImagePrefix, stripDigest(base))}"
     "org.opencontainers.image.base.digest" = "${digest(base)}"
   }
+}
+
+function stripDigest {
+  params = [ imageNameWithSha ]
+  result = index(split("@", imageNameWithSha), 0)
 }
 
 function tag {
@@ -137,6 +189,11 @@ function distroVersion {
 function digest {
   params = [ imageNameWithSha ]
   result = index(split("@", imageNameWithSha), 1)
+}
+
+function prefixBaseImage {
+  params = [ prefix, imageName ]
+  result = prefix == "" ? imageName : "${prefix}${imageName}"
 }
 
 function cleanVersion {
