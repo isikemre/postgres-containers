@@ -14,7 +14,14 @@ is to run the tests below in order and produce an evidence-backed report.
   Kubernetes Secrets. Keep it out of the report, the evidence and your
   messages.
 - **Scripts:** every test is a code block that starts with `# file: <name>`.
-  Save it under that name in `~/pgee-test/`, unchanged, and run it as
+  Do not retype them. Extract all of them at once with this command (path to
+  this plan as the last argument), then edit only `pgee-test.env` in Step 0:
+
+  ```sh
+  mkdir -p ~/pgee-test/evidence && awk '/^```/{if(f){close(f);f=""};next} /^# file: /{f=ENVIRON["HOME"]"/pgee-test/"$3} f{print > f}' AGENT-TESTPLAN.md && ls ~/pgee-test
+  ```
+
+  It must list 17 files and the `evidence` directory. Run each test as
   `sh ~/pgee-test/<name> 2>&1 | tee ~/pgee-test/evidence/<name>.txt`.
   The script prints `PASS`, `FAIL` or `SKIP` and appends that line to
   `~/pgee-test/report.txt`. Its verdict is the result: record it as is.
