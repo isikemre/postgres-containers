@@ -21,7 +21,7 @@ is to run the tests below in order and produce an evidence-backed report.
   mkdir -p ~/pgee-test/evidence && awk '/^```/{if(f){close(f);f=""};next} /^# file: /{f=ENVIRON["HOME"]"/pgee-test/"$3} f{print > f}' AGENT-TESTPLAN.md && ls ~/pgee-test
   ```
 
-  It must list 17 files and the `evidence` directory. Run each test as
+  It must list 18 files and the `evidence` directory. Run each test as
   `sh ~/pgee-test/<name> 2>&1 | tee ~/pgee-test/evidence/<name>.txt`.
   The script prints `PASS`, `FAIL` or `SKIP` and appends that line to
   `~/pgee-test/report.txt`. Its verdict is the result: record it as is.
@@ -42,7 +42,7 @@ Ask the human for these values if you do not have them. Then write both files.
 | `PULL_SECRET` | Image pull secret in `TEST_NS`, empty if not needed |
 | `STORAGE_CLASS` | StorageClass for test volumes, empty for the default |
 | `STORAGE_SIZE` | Volume size per instance, e.g. `2Gi` |
-| `OBJECTSTORE` | Name of a ready Barman Cloud `ObjectStore` in `TEST_NS` for test T11, empty to skip T11 |
+| `OBJECTSTORE` | Name of a ready Barman Cloud `ObjectStore` in `TEST_NS` for tests T11 and T11b, empty to skip them |
 
 ```sh
 # file: pgee-test.env
@@ -506,6 +506,97 @@ echo "restored rows: $n (after-backup: $a)"
 [ "$a" = 10 ] || fail "WAL written after the backup was not replayed"
 k delete cluster "$SRC" "$DST" --wait=false >/dev/null
 pass "backup and restore with WAL replay OK, same key, encrypted (object store prefix $SRC remains)"
+```
+
+### T11b Point-in-time recovery and restore with the wrong key (optional)
+
+Runs only when `OBJECTSTORE` is set. Rows are written before and after a
+recorded point in time; a restore to that time must contain the first and not
+the second. A restore of the same backup with the wrong key must be refused.
+
+```sh
+# file: t11b-pitr.sh
+. "$HOME/pgee-test/pgee-test-lib.sh"
+T=T11b
+[ -n "${OBJECTSTORE:-}" ] || skip "OBJECTSTORE not set"
+k get objectstores.barmancloud.cnpg.io "$OBJECTSTORE" >/dev/null || fail "ObjectStore $OBJECTSTORE not found in $TEST_NS"
+RUN=$(date +%s)
+SRC=pgee-pitr-$RUN
+DST=pgee-pitr-rst-$RUN
+BAD=pgee-pitr-bad-$RUN
+cat >"$W/snip-pitr.yaml" <<EOF
+  bootstrap:
+    initdb:
+      dataChecksums: true
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: $OBJECTSTORE
+EOF
+cluster_yaml "$SRC" "$IMAGE_17" 1 pgee-test-key "$W/snip-pitr.yaml" | k apply -f - >/dev/null
+wait_ready "$SRC" 900 || fail "$SRC not Ready"
+retry 600 sh -c "[ \"\$(kubectl -n $TEST_NS get cluster $SRC -o jsonpath='{.status.conditions[?(@.type==\"ContinuousArchiving\")].status}')\" = True ]" ||
+	fail "WAL archiving not working on $SRC"
+sql "$SRC-1" "create table pitr as select 'base'::text x from generate_series(1,1000)" app >/dev/null
+cat <<EOF | k apply -f - >/dev/null
+apiVersion: postgresql.cnpg.io/v1
+kind: Backup
+metadata:
+  name: $SRC-backup
+  labels:
+    pgee-test: "true"
+spec:
+  cluster:
+    name: $SRC
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
+EOF
+retry 1200 sh -c "[ \"\$(kubectl -n $TEST_NS get backup $SRC-backup -o jsonpath='{.status.phase}')\" = completed ]" ||
+	fail "backup did not complete"
+sql "$SRC-1" "insert into pitr select 'wanted' from generate_series(1,10)" app >/dev/null
+sleep 5
+TARGET=$(sql "$SRC-1" "select to_char(now() at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
+sleep 5
+sql "$SRC-1" "insert into pitr select 'unwanted' from generate_series(1,10)" app >/dev/null
+seg=$(sql "$SRC-1" "select pg_walfile_name(pg_switch_wal())")
+retry 300 sh -c "kubectl -n $TEST_NS exec $SRC-1 -c postgres -- psql -XAtq -c \"select last_archived_wal >= '$seg' from pg_stat_archiver\" | grep -qx t" ||
+	fail "WAL segment $seg was not archived"
+echo "target time: $TARGET"
+cat >"$W/snip-pitr-rst.yaml" <<EOF
+  bootstrap:
+    recovery:
+      source: origin
+      recoveryTarget:
+        targetTime: "$TARGET"
+  externalClusters:
+    - name: origin
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: $OBJECTSTORE
+          serverName: $SRC
+EOF
+cluster_yaml "$DST" "$IMAGE_17" 1 pgee-test-key "$W/snip-pitr-rst.yaml" | k apply -f - >/dev/null
+cluster_yaml "$BAD" "$IMAGE_17" 1 pgee-test-wrongkey "$W/snip-pitr-rst.yaml" | k apply -f - >/dev/null
+wait_ready "$DST" 1800 || fail "PITR cluster $DST not Ready"
+encrypted "$DST-1" || fail "PITR cluster not encrypted"
+[ "$(fingerprint "$DST-1")" = "$(fingerprint "$SRC-1")" ] || fail "PITR cluster has a different key fingerprint"
+b=$(sql "$DST-1" "select count(*) from pitr where x = 'base'" app)
+w=$(sql "$DST-1" "select count(*) from pitr where x = 'wanted'" app)
+u=$(sql "$DST-1" "select count(*) from pitr where x = 'unwanted'" app)
+echo "PITR rows: base $b, wanted $w, unwanted $u"
+[ "$b" = 1000 ] && [ "$w" = 10 ] || fail "PITR cluster misses rows written before the target time"
+[ "$u" = 0 ] || fail "PITR cluster contains rows written after the target time"
+sql "$DST-1" "insert into pitr values ('writable')" app >/dev/null || fail "PITR cluster is not writable after promotion"
+echo "PITR: stopped at the target time, promoted, writable"
+ready "$BAD" && fail "restore with the WRONG key became Ready"
+logs=$(for p in $(k get pods -o name | grep "$BAD-1-full-recovery"); do k logs "$p" 2>/dev/null; done)
+echo "$logs" | grep -q 'invalid encryption key' || fail "wrong-key restore failed, but not with 'invalid encryption key'"
+echo "restore with wrong key: refused with 'invalid encryption key'"
+k delete cluster "$SRC" "$DST" "$BAD" --wait=false >/dev/null
+pass "PITR to target time OK, same key, encrypted; wrong key refused (object store prefix $SRC remains)"
 ```
 
 ### T12 Major upgrade by logical import into PGEE 18

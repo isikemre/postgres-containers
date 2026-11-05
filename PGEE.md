@@ -30,7 +30,8 @@ verschlüsselte WAL abspielen. Daraus folgt die eine Regel, auf die es ankommt:
 | Replica (`join`), Scale-out | `pg_basebackup` kopiert PGDATA samt `postgresql.conf` (und `tdekey.json`) | Kein `-K` nötig, die Replica holt denselben DEK aus derselben Quelle |
 | Switchover/Failover | CNPG ruft `pg_rewind` ohne `-K` auf | PGEE-`pg_rewind` liest `encryption_key_command` selbst aus der Ziel-`postgresql.conf`, kein Wrapper nötig |
 | Backup (Barman Cloud Plugin) | Dateien und WAL werden roh kopiert | Liegen verschlüsselt im Object Store |
-| Restore, `bootstrap.pg_basebackup`, Replica-Cluster | Physische Kopie | Braucht Zugriff auf **denselben** Schlüssel wie die Quelle, sonst `FATAL: invalid encryption key` |
+| Restore, PITR, `bootstrap.pg_basebackup`, Replica-Cluster | Physische Kopie | Braucht Zugriff auf **denselben** Schlüssel wie die Quelle, sonst `FATAL: invalid encryption key` |
+| Logischer Dump (`pg_dump`, auch `bootstrap.initdb.import`) | Liest über den Server | **Klartext**, TDE schützt nur Daten auf Disk |
 
 Weil `-K` im Image steckt, braucht es kein deprecated
 `bootstrap.initdb.options`. `dataChecksums` und die übrigen `initdb`-Felder
@@ -193,8 +194,8 @@ Push in eine private Registry (z. B. Harbor):
   harter Failover, Scale-out. Er ist destruktiv und nur für Testcluster
   gedacht.
 - [`pgee/test/AGENT-TESTPLAN.md`](pgee/test/AGENT-TESTPLAN.md) ist der
-  vollständige Abnahmeplan T00–T13 (inklusive Klon, Backup/Restore, Import und
-  In-place-Upgrade), geschrieben für einen Agenten, der ihn in der
+  vollständige Abnahmeplan T00–T13 (inklusive Klon, Backup/Restore, PITR,
+  Import und In-place-Upgrade), geschrieben für einen Agenten, der ihn in der
   Zielumgebung abarbeitet und einen Report mit Evidenz erstellt.
 
 Stand 05.11.2026 mit den PGEE-Demo-Paketen (17.11ee1.4.7, 18.6ee1.5.5,
@@ -215,6 +216,12 @@ k3d, jeweils mit `file` und mit `key-manager` + Vault:
 - Backup über das Barman Cloud Plugin (RustFS als S3) und Restore in einen
   neuen Cluster mit demselben Secret: verschlüsselt, gleicher Fingerprint,
   WAL nach dem Backup wird eingespielt
+- PITR (`recoveryTarget.targetTime`): stoppt am Zielzeitpunkt, Cluster danach
+  beschreibbar. Restore desselben Backups mit falschem Key: abgelehnt mit
+  `invalid encryption key`
+- Object Store durchsucht: Ein Marker aus einer Tabelle steht weder in
+  `data.tar` noch in den entpackten WAL-Segmenten, der Schlüssel auch nicht.
+  Im selben Lauf enthält ein `pg_dump` den Marker im Klartext
 - Build über einen HTTP-Proxy (Debian per HTTP, CYBERTEC per CONNECT)
 - `docker buildx bake --push` mit Standard-Ausgabe (OCI-Index, SBOM,
   Provenance) in eine Registry, Pull per Digest durch k3d
@@ -256,6 +263,21 @@ Nicht getestet:
   auf die alte Major-Version zurücksetzen. Im Modus `key-manager` erzeugt
   `initdb` für das neue Datenverzeichnis zudem einen neuen DEK, dort wäre ein
   In-place-Upgrade auch nach dem Fix nicht möglich.
+- **Logische Dumps sind Klartext.** Ein `pg_dump` (auch per CronJob) braucht
+  eigene Verschlüsselung, z. B. `age`/`gpg`, und ein Ziel mit
+  Zugriffsschutz. `bootstrap.initdb.import` legt seine Dumps vorübergehend
+  unverschlüsselt unter `/var/lib/postgresql/data/dumps` auf das PVC des neuen
+  Clusters und löscht sie danach nur (kein Überschreiben). Wer das ausschließen
+  muss, braucht Verschlüsselung auf Storage-Ebene.
+- **Im physischen Backup bleiben lesbar:** Konfigurationsdateien
+  (`pg_hba.conf`, `postgresql.conf` mit dem Pfad des Key-Commands, ohne
+  Schlüssel), `backup.info` und die Metadaten in `pg_control`. Zusätzlich
+  serverseitige Verschlüsselung im Object Store (`data.encryption` und
+  `wal.encryption` im `ObjectStore`, wenn der S3-Dienst sie unterstützt) und
+  TLS zum Endpunkt nutzen.
+- **WAL-Kompression bringt kaum etwas,** verschlüsselte Seiten komprimieren
+  schlecht. Ein volles WAL-Segment mit Daten liegt gzip-komprimiert bei rund
+  12 von 16 MB. Den Object Store entsprechend dimensionieren.
 - **DEK-Rotation** unterstützt PGEE nicht, rotierbar ist nur der KEK im Modus
   `key-manager`.
 
