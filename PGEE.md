@@ -263,6 +263,10 @@ Nicht getestet:
   auf die alte Major-Version zurücksetzen. Im Modus `key-manager` erzeugt
   `initdb` für das neue Datenverzeichnis zudem einen neuen DEK, dort wäre ein
   In-place-Upgrade auch nach dem Fix nicht möglich.
+- **NetworkPolicies:** Bei Default-Deny (z. B. Cilium) braucht der Namespace
+  Freigaben: CNPG-Operator zu den Instanz-Pods auf 8000, Instanzen
+  untereinander auf 5432 und 8000, Instanzen zur Kubernetes-API und zum Object
+  Store. Das ist kein PGEE-Thema, fällt aber beim ersten Cluster auf.
 - **Logische Dumps sind Klartext.** Ein `pg_dump` (auch per CronJob) braucht
   eigene Verschlüsselung, z. B. `age`/`gpg`, und ein Ziel mit
   Zugriffsschutz. `bootstrap.initdb.import` legt seine Dumps vorübergehend

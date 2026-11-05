@@ -34,6 +34,12 @@ is to run the tests below in order and produce an evidence-backed report.
 
 Ask the human for these values if you do not have them. Then write both files.
 
+If `TEST_NS` has a default-deny NetworkPolicy (e.g. Cilium), the human must
+allow, before T3: the CNPG operator (`cnpg-system`) to the instance pods on
+port 8000, the instance pods to each other on 5432 and 8000, the instance pods
+to the Kubernetes API, and for T11/T11b to the object store. Without it,
+clusters never get Ready. Do not create cluster-wide policies yourself.
+
 | Variable | Meaning |
 |---|---|
 | `TEST_NS` | Dedicated, existing test namespace |
@@ -68,10 +74,10 @@ pass() { echo "PASS $T $*" | tee -a "$REPORT"; exit 0; }
 skip() { echo "SKIP $T $*" | tee -a "$REPORT"; exit 0; }
 fail() { echo "FAIL $T $*" | tee -a "$REPORT"; exit 1; }
 
-primary() { k get cluster "$1" -o jsonpath='{.status.currentPrimary}'; }
+primary() { k get clusters.postgresql.cnpg.io "$1" -o jsonpath='{.status.currentPrimary}'; }
 instances() { k get pods -l "cnpg.io/cluster=$1,cnpg.io/podRole=instance" -o jsonpath='{.items[*].metadata.name}'; }
 replica() { k get pods -l "cnpg.io/cluster=$1,cnpg.io/instanceRole=replica" -o jsonpath='{.items[0].metadata.name}'; }
-phase() { k get cluster "$1" -o jsonpath='{.status.phase}'; }
+phase() { k get clusters.postgresql.cnpg.io "$1" -o jsonpath='{.status.phase}'; }
 # sql <pod> <statement> [database]
 sql() { k exec "$1" -c postgres -- psql -XAtq -d "${3:-postgres}" -c "$2"; }
 controldata() { k exec "$1" -c postgres -- pg_controldata "$PGDATA_DIR"; }
@@ -89,7 +95,7 @@ retry() {
 		sleep 10
 	done
 }
-ready() { [ "$(k get cluster "$1" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ]; }
+ready() { [ "$(k get clusters.postgresql.cnpg.io "$1" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ]; }
 # wait_ready <cluster> [seconds]
 wait_ready() {
 	sleep 20
@@ -181,13 +187,13 @@ for r in clusters.postgresql.cnpg.io secrets pods pods/exec; do
 	[ "$(kubectl auth can-i create "$r" -n "$TEST_NS")" = yes ] || fail "no permission to create $r in $TEST_NS"
 done
 [ "$(kubectl auth can-i patch clusters.postgresql.cnpg.io/status -n "$TEST_NS")" = yes ] ||
-	fail "no permission to patch cluster status (needed for switchover)"
+	fail "no permission to patch clusters.postgresql.cnpg.io status (needed for switchover)"
 if kubectl get crd objectstores.barmancloud.cnpg.io >/dev/null 2>&1; then
 	echo "barman cloud plugin: installed"
 else
 	echo "barman cloud plugin: not installed"
 fi
-left=$(k get cluster -l pgee-test=true -o name)
+left=$(k get clusters.postgresql.cnpg.io -l pgee-test=true -o name)
 [ -z "$left" ] || fail "leftover test clusters, run Cleanup first: $left"
 pass "kubectl, operator, permissions and namespace OK"
 ```
@@ -344,7 +350,7 @@ T=T07
 OLD=$(primary pgee-test)
 NEW=$(replica pgee-test)
 echo "switchover $OLD -> $NEW"
-k patch cluster pgee-test --subresource=status --type=merge \
+k patch clusters.postgresql.cnpg.io pgee-test --subresource=status --type=merge \
 	-p "{\"status\":{\"targetPrimary\":\"$NEW\"}}" >/dev/null || fail "cannot request switchover"
 wait_ready pgee-test 900 || fail "cluster not Ready after switchover"
 [ "$(primary pgee-test)" = "$NEW" ] || fail "primary is $(primary pgee-test), expected $NEW"
@@ -380,10 +386,10 @@ pass "failover to $P, data intact, $OLD rejoined"
 # file: t09-scaleout.sh
 . "$HOME/pgee-test/pgee-test-lib.sh"
 T=T09
-k patch cluster pgee-test --type=merge -p '{"spec":{"instances":4}}' >/dev/null
+k patch clusters.postgresql.cnpg.io pgee-test --type=merge -p '{"spec":{"instances":4}}' >/dev/null
 wait_ready pgee-test 1200 || fail "4th instance did not become Ready"
 all_encrypted pgee-test || fail "new instance uses a different key or is unencrypted"
-k patch cluster pgee-test --type=merge -p '{"spec":{"instances":3}}' >/dev/null
+k patch clusters.postgresql.cnpg.io pgee-test --type=merge -p '{"spec":{"instances":3}}' >/dev/null
 wait_ready pgee-test 900 || fail "cluster not Ready after scaling back to 3"
 pass "4th instance joined with the same key, scaled back to 3"
 ```
@@ -427,7 +433,7 @@ ready pgee-clone-bad && fail "clone with the WRONG key became Ready"
 logs=$(for p in $(k get pods -o name | grep pgee-clone-bad-1-pgbasebackup); do k logs "$p" 2>/dev/null; done)
 echo "$logs" | grep -q 'invalid encryption key' || fail "wrong-key clone failed, but not with 'invalid encryption key'"
 echo "clone with wrong key: refused with 'invalid encryption key'"
-k delete cluster pgee-clone-ok pgee-clone-bad --wait=false >/dev/null
+k delete clusters.postgresql.cnpg.io pgee-clone-ok pgee-clone-bad --wait=false >/dev/null
 pass "same key clones, wrong key is refused"
 ```
 
@@ -458,7 +464,7 @@ cat >"$W/snip-bkp.yaml" <<EOF
 EOF
 cluster_yaml "$SRC" "$IMAGE_17" 1 pgee-test-key "$W/snip-bkp.yaml" | k apply -f - >/dev/null
 wait_ready "$SRC" 900 || fail "$SRC not Ready"
-retry 600 sh -c "[ \"\$(kubectl -n $TEST_NS get cluster $SRC -o jsonpath='{.status.conditions[?(@.type==\"ContinuousArchiving\")].status}')\" = True ]" ||
+retry 600 sh -c "[ \"\$(kubectl -n $TEST_NS get clusters.postgresql.cnpg.io $SRC -o jsonpath='{.status.conditions[?(@.type==\"ContinuousArchiving\")].status}')\" = True ]" ||
 	fail "WAL archiving not working on $SRC"
 sql "$SRC-1" "create table keep as select 'in-backup'::text x from generate_series(1,1000)" app >/dev/null
 cat <<EOF | k apply -f - >/dev/null
@@ -475,8 +481,8 @@ spec:
   pluginConfiguration:
     name: barman-cloud.cloudnative-pg.io
 EOF
-retry 1200 sh -c "[ \"\$(kubectl -n $TEST_NS get backup $SRC-backup -o jsonpath='{.status.phase}')\" = completed ]" ||
-	fail "backup did not complete, phase: $(k get backup "$SRC-backup" -o jsonpath='{.status.phase}')"
+retry 1200 sh -c "[ \"\$(kubectl -n $TEST_NS get backups.postgresql.cnpg.io $SRC-backup -o jsonpath='{.status.phase}')\" = completed ]" ||
+	fail "backup did not complete, phase: $(k get backups.postgresql.cnpg.io "$SRC-backup" -o jsonpath='{.status.phase}')"
 echo "backup completed"
 # separate calls: one psql -c is one transaction, the switch must follow the commit
 sql "$SRC-1" "insert into keep select 'after-backup' from generate_series(1,10)" app >/dev/null
@@ -504,7 +510,7 @@ a=$(sql "$DST-1" "select count(*) from keep where x = 'after-backup'" app)
 echo "restored rows: $n (after-backup: $a)"
 [ "$n" -ge 1000 ] || fail "restored data incomplete"
 [ "$a" = 10 ] || fail "WAL written after the backup was not replayed"
-k delete cluster "$SRC" "$DST" --wait=false >/dev/null
+k delete clusters.postgresql.cnpg.io "$SRC" "$DST" --wait=false >/dev/null
 pass "backup and restore with WAL replay OK, same key, encrypted (object store prefix $SRC remains)"
 ```
 
@@ -536,7 +542,7 @@ cat >"$W/snip-pitr.yaml" <<EOF
 EOF
 cluster_yaml "$SRC" "$IMAGE_17" 1 pgee-test-key "$W/snip-pitr.yaml" | k apply -f - >/dev/null
 wait_ready "$SRC" 900 || fail "$SRC not Ready"
-retry 600 sh -c "[ \"\$(kubectl -n $TEST_NS get cluster $SRC -o jsonpath='{.status.conditions[?(@.type==\"ContinuousArchiving\")].status}')\" = True ]" ||
+retry 600 sh -c "[ \"\$(kubectl -n $TEST_NS get clusters.postgresql.cnpg.io $SRC -o jsonpath='{.status.conditions[?(@.type==\"ContinuousArchiving\")].status}')\" = True ]" ||
 	fail "WAL archiving not working on $SRC"
 sql "$SRC-1" "create table pitr as select 'base'::text x from generate_series(1,1000)" app >/dev/null
 cat <<EOF | k apply -f - >/dev/null
@@ -553,7 +559,7 @@ spec:
   pluginConfiguration:
     name: barman-cloud.cloudnative-pg.io
 EOF
-retry 1200 sh -c "[ \"\$(kubectl -n $TEST_NS get backup $SRC-backup -o jsonpath='{.status.phase}')\" = completed ]" ||
+retry 1200 sh -c "[ \"\$(kubectl -n $TEST_NS get backups.postgresql.cnpg.io $SRC-backup -o jsonpath='{.status.phase}')\" = completed ]" ||
 	fail "backup did not complete"
 sql "$SRC-1" "insert into pitr select 'wanted' from generate_series(1,10)" app >/dev/null
 sleep 5
@@ -595,7 +601,7 @@ ready "$BAD" && fail "restore with the WRONG key became Ready"
 logs=$(for p in $(k get pods -o name | grep "$BAD-1-full-recovery"); do k logs "$p" 2>/dev/null; done)
 echo "$logs" | grep -q 'invalid encryption key' || fail "wrong-key restore failed, but not with 'invalid encryption key'"
 echo "restore with wrong key: refused with 'invalid encryption key'"
-k delete cluster "$SRC" "$DST" "$BAD" --wait=false >/dev/null
+k delete clusters.postgresql.cnpg.io "$SRC" "$DST" "$BAD" --wait=false >/dev/null
 pass "PITR to target time OK, same key, encrypted; wrong key refused (object store prefix $SRC remains)"
 ```
 
@@ -605,7 +611,7 @@ pass "PITR to target time OK, same key, encrypted; wrong key refused (object sto
 # file: t12-import.sh
 . "$HOME/pgee-test/pgee-test-lib.sh"
 T=T12
-k patch cluster pgee-test --type=merge -p '{"spec":{"enableSuperuserAccess":true}}' >/dev/null
+k patch clusters.postgresql.cnpg.io pgee-test --type=merge -p '{"spec":{"enableSuperuserAccess":true}}' >/dev/null
 retry 300 k get secret pgee-test-superuser || fail "superuser secret not created"
 cat >"$W/snip-import.yaml" <<'EOF'
   bootstrap:
@@ -634,7 +640,7 @@ sql "$P" 'select version()'
 sql "$P" 'select version()' | grep -q 'PostgreSQL 18' || fail "import cluster does not run PostgreSQL 18"
 [ "$(sql "$P" 'select count(*) from keep' app)" = 100000 ] || fail "imported data incomplete"
 all_encrypted pgee-import || fail "import cluster not encrypted with one key"
-k delete cluster pgee-import --wait=false >/dev/null
+k delete clusters.postgresql.cnpg.io pgee-import --wait=false >/dev/null
 pass "PGEE 17 -> 18 by import: 100000 rows, encrypted"
 ```
 
@@ -657,7 +663,7 @@ P=$(primary pgee-test)
 FP=$(fingerprint "$P")
 ROWS=$(sql "$P" 'select count(*) from keep' app)
 echo "before: $(sql "$P" 'select version()'), fingerprint $FP, $ROWS rows"
-k patch cluster pgee-test --type=merge -p "{\"spec\":{\"imageName\":\"$IMAGE_18\"}}" >/dev/null
+k patch clusters.postgresql.cnpg.io pgee-test --type=merge -p "{\"spec\":{\"imageName\":\"$IMAGE_18\"}}" >/dev/null
 result=
 t=2400
 while [ "$t" -gt 0 ]; do
@@ -687,7 +693,7 @@ for j in $(k get pods -o name | grep major-upgrade); do
 	k logs "$j" 2>&1 | grep -E 'char signedness|encryption key|Failure|error while running' | cut -c1-400
 done
 echo "== rolling back to $IMAGE_17"
-k patch cluster pgee-test --type=merge -p "{\"spec\":{\"imageName\":\"$IMAGE_17\"}}" >/dev/null
+k patch clusters.postgresql.cnpg.io pgee-test --type=merge -p "{\"spec\":{\"imageName\":\"$IMAGE_17\"}}" >/dev/null
 if wait_ready pgee-test 1800 && [ "$(sql "$(primary pgee-test)" 'select count(*) from keep' app)" = "$ROWS" ]; then
 	echo "rollback OK: cluster Ready on 17 with $ROWS rows"
 	fail "in-place upgrade 17 -> 18 did not succeed (${result:-timeout}); rollback to 17 worked"
@@ -704,12 +710,12 @@ Run after the last test, unless a test said STOP.
 # file: t99-cleanup.sh
 . "$HOME/pgee-test/pgee-test-lib.sh"
 T=T99
-k delete cluster -l pgee-test=true --wait=true
-k delete backup -l pgee-test=true --ignore-not-found
+k delete clusters.postgresql.cnpg.io -l pgee-test=true --wait=true
+k delete backups.postgresql.cnpg.io -l pgee-test=true --ignore-not-found
 k delete pod -l pgee-test=true --ignore-not-found
 k delete secret -l pgee-test=true --ignore-not-found
 rm -f "$W/test.key" "$W/wrong.key"
-[ -z "$(k get cluster,secret,pod -l pgee-test=true -o name)" ] || fail "test resources left over"
+[ -z "$(k get clusters.postgresql.cnpg.io,secret,pod -l pgee-test=true -o name)" ] || fail "test resources left over"
 pass "test resources and local keys removed"
 ```
 

@@ -12,7 +12,7 @@ NS=${NS:-default}
 PGDATA=/var/lib/postgresql/data/pgdata
 
 k() { kubectl -n "$NS" "$@"; }
-primary() { k get cluster "$C" -o jsonpath='{.status.currentPrimary}'; }
+primary() { k get clusters.postgresql.cnpg.io "$C" -o jsonpath='{.status.currentPrimary}'; }
 instances() { k get pods -l "cnpg.io/cluster=$C,cnpg.io/podRole=instance" -o jsonpath='{.items[*].metadata.name}'; }
 sql() { k exec "$1" -c postgres -- psql -XAtq -c "$2"; }
 ok() { echo "OK    $*"; }
@@ -33,7 +33,7 @@ retry() {
 in_recovery() { [ "$(sql "$1" 'select pg_is_in_recovery()')" = t ]; }
 wait_ready() {
 	sleep 5
-	k wait --for=condition=Ready "cluster/$C" --timeout="${1:-600}s" >/dev/null ||
+	k wait --for=condition=Ready "clusters.postgresql.cnpg.io/$C" --timeout="${1:-600}s" >/dev/null ||
 		fail "cluster $C not Ready"
 }
 
@@ -76,7 +76,7 @@ ok "$n streaming replica(s)"
 echo "== T4 switchover"
 OLD=$(primary)
 NEW=$(k get pods -l "cnpg.io/cluster=$C,cnpg.io/instanceRole=replica" -o jsonpath='{.items[0].metadata.name}')
-k patch cluster "$C" --subresource=status --type=merge -p "{\"status\":{\"targetPrimary\":\"$NEW\"}}" >/dev/null
+k patch clusters.postgresql.cnpg.io "$C" --subresource=status --type=merge -p "{\"status\":{\"targetPrimary\":\"$NEW\"}}" >/dev/null
 wait_ready
 [ "$(primary)" = "$NEW" ] || fail "switchover to $NEW failed"
 ok "primary is now $NEW"
@@ -99,11 +99,11 @@ retry 300 in_recovery "$OLD" || fail "$OLD did not rejoin as replica"
 ok "$OLD rejoined as replica"
 
 echo "== T6 scale out: a new replica joins via pg_basebackup"
-N=$(k get cluster "$C" -o jsonpath='{.spec.instances}')
-k patch cluster "$C" --type=merge -p "{\"spec\":{\"instances\":$((N + 1))}}" >/dev/null
+N=$(k get clusters.postgresql.cnpg.io "$C" -o jsonpath='{.spec.instances}')
+k patch clusters.postgresql.cnpg.io "$C" --type=merge -p "{\"spec\":{\"instances\":$((N + 1))}}" >/dev/null
 wait_ready 900
 check_all
-k patch cluster "$C" --type=merge -p "{\"spec\":{\"instances\":$N}}" >/dev/null
+k patch clusters.postgresql.cnpg.io "$C" --type=merge -p "{\"spec\":{\"instances\":$N}}" >/dev/null
 wait_ready 900
 
 echo "== passed. Not covered here: backup/restore, key service outage, KEK rotation (see PGEE.md)"
