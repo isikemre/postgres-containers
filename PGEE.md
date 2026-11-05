@@ -158,6 +158,9 @@ CYBERTEC-Repo, nicht `postgreSQLVersions`. Das Image ist lizenzpflichtig und
 gehört nur in eine private Registry, nie in die öffentliche GitHub-CI dieses
 Forks.
 
+Demo-Pakete (`~demo`, 1 GB pro Tabelle) lehnt der Build ab. Für Tests mit dem
+`public`-Repo: `--set '*.args.PGEE_ALLOW_DEMO=true'`.
+
 ## Testen
 
 - [`pgee/test/smoke-local.sh`](pgee/test/smoke-local.sh) testet ein Image ohne
@@ -185,6 +188,10 @@ jeweils mit `file` und mit `key-manager` + Vault:
 - Vault-Token ungültig: Ein Replica-Neustart scheitert, der Primary läuft
   weiter, nach Korrektur erholt sich die Replica
 - Build über einen HTTP-Proxy (Debian per HTTP, CYBERTEC per CONNECT)
+- Major-Upgrade 17 → 18 in-place (CNPG `pg_upgrade`): **scheitert**, siehe
+  unten. Rollback auf das 17er-Image stellt den Cluster wieder her
+- Major-Upgrade 17 → 18 per `bootstrap.initdb.import` in einen neuen Cluster
+  mit demselben Secret: funktioniert, verschlüsselt
 
 Nicht getestet:
 
@@ -192,7 +199,6 @@ Nicht getestet:
 - amd64
 - die Vollversion aus dem `pgee`-Repo mit `aptAuth`
 - KEK-Rotation
-- In-place-Major-Upgrade
 
 ## Grenzen
 
@@ -204,8 +210,31 @@ Nicht getestet:
   verschlüsseln. Sie werden logisch umgezogen, z. B. in einen neuen Cluster
   mit `bootstrap.initdb.import` (läuft über `initdb`, also verschlüsselt) oder
   per logischer Replikation.
-- **Major-Upgrade in-place** (CNPG `pg_upgrade`): nicht getestet. Der Wrapper
-  legt dabei für das neue Datenverzeichnis einen neuen Schlüssel an. Bis das
-  geklärt ist, das Upgrade logisch per Import durchführen.
+- **Major-Upgrade in-place** (CNPG `pg_upgrade`, ausgelöst durch ein Image mit
+  höherer Major-Version) funktioniert mit 18.6ee1.5.5 nicht. Das
+  PGEE-`pg_upgrade` ruft `pg_resetwal --char-signedness` ohne Schlüssel auf
+  (`could not read encryption key from stdin`), auch mit `-K` und auch ohne
+  CNPG. Das ist ein Bug für CYBERTEC (bugs-ee@cybertec.at). Bis zum Fix
+  Major-Upgrades per `bootstrap.initdb.import` in einen neuen Cluster mit
+  demselben Secret durchführen. Geht ein In-place-Upgrade versehentlich los,
+  `imageName` bzw. den Katalog auf die alte Major-Version zurücksetzen. Im Modus
+  `key-manager` erzeugt `initdb` für das neue Datenverzeichnis zudem einen neuen
+  DEK, ein In-place-Upgrade wäre dort auch nach dem Fix nicht möglich.
 - **DEK-Rotation** unterstützt PGEE nicht, rotierbar ist nur der KEK im Modus
   `key-manager`.
+
+## Feste Verträge
+
+Diese Dinge stecken in Datenverzeichnissen, Backups und Cluster-Specs. Künftige
+Images müssen sie beibehalten, sonst lassen sich bestehende Cluster und alte
+Backups nicht mehr starten:
+
+- der Pfad `/usr/local/bin/pgee-tde-key` (steht in jeder `postgresql.conf`)
+- die Variablen `TDE_KEY_SOURCE`, `TDE_KEY_FILE`, `TDE_KEY_BITS` und das
+  Schlüsselformat (Hex)
+- das Secret mit dem Schlüssel, solange es Daten oder Backups gibt
+
+Vor jedem Update von CNPG, PGEE oder diesem Repo: Image bauen,
+`smoke-local.sh` und auf einem Testcluster `verify-tde.sh` laufen lassen. Bei
+CNPG-Updates gilt das besonders, weil die Lösung davon abhängt, dass CNPG
+`initdb` über den PATH aufruft und `PG*`-Variablen reserviert.
