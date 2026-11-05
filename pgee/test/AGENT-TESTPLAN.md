@@ -686,7 +686,19 @@ if [ "$result" = upgraded ]; then
 	[ "$(sql "$P" 'select count(*) from keep' app)" = "$ROWS" ] || fail "row count changed during upgrade"
 	all_encrypted pgee-test || fail "not all instances encrypted after upgrade"
 	[ "$(fingerprint "$P")" = "$FP" ] || fail "key fingerprint changed during upgrade"
-	pass "in-place upgrade 17 -> 18 succeeded: data intact, encrypted, same key"
+	# same check as T05, now on every upgraded data directory
+	sql "$P" "create table tde_probe18(t text)" app >/dev/null
+	sql "$P" "insert into tde_probe18 values ('PLAINTEXT_MARKER_1813')" app >/dev/null
+	sql "$P" "checkpoint" >/dev/null
+	F=$(sql "$P" "select pg_relation_filepath('tde_probe18')" app)
+	for i in $(instances pgee-test); do
+		retry 120 k exec "$i" -c postgres -- test -s "$PGDATA_DIR/$F" || fail "$F not replicated to $i"
+		[ "$i" = "$P" ] || sql "$i" "checkpoint" >/dev/null
+		n=$(k exec "$i" -c postgres -- sh -c "grep -l PLAINTEXT_MARKER_1813 $PGDATA_DIR/$F $PGDATA_DIR/pg_wal/* /var/lib/postgresql/wal/* 2>/dev/null | wc -l")
+		[ "$n" = 0 ] || fail "plaintext marker found on $i after the upgrade"
+	done
+	echo "no plaintext in heap file $F or WAL on: $(instances pgee-test)"
+	pass "in-place upgrade 17 -> 18 succeeded: data intact, encrypted, same key, no plaintext on disk"
 fi
 echo "== upgrade job log (relevant lines)"
 for j in $(k get pods -o name | grep major-upgrade); do

@@ -230,11 +230,15 @@ k3d, jeweils mit `file` und mit `key-manager` + Vault:
 - Major-Upgrade 17 → 18 per `bootstrap.initdb.import` in einen neuen Cluster
   mit demselben Secret: funktioniert, verschlüsselt
 
+Abnahme in einer air-gapped Zielumgebung (amd64, lizenzierte Pakete über einen
+internen APT-Mirror, Basis Ubuntu 24.04, private Harbor, Cilium mit
+Default-Deny) mit [`AGENT-TESTPLAN.md`](pgee/test/AGENT-TESTPLAN.md): T00–T13
+bestanden, inklusive In-place-Upgrade 17 → 18.
+
 Nicht getestet:
 
-- amd64
-- die Vollversion aus dem `pgee`-Repo mit `aptAuth`
 - KEK-Rotation
+- PITR (T11b) in der Zielumgebung
 
 ## Grenzen
 
@@ -253,11 +257,13 @@ Nicht getestet:
   mit `could not read encryption key from stdin`, auch mit `-K` und auch ohne
   CNPG. Ob dieser Aufruf überhaupt stattfindet, hängt an der Plattform: Auf
   arm64 bei Quellversionen vor 18 ja, dort scheitert das Upgrade. Auf amd64
-  wird der Schritt übersprungen, und das Upgrade läuft durch (gegengeprüft mit
-  `pg_upgrade` allein, der CNPG-Weg auf amd64 ist nicht getestet). Mit
+  wird der Schritt übersprungen, und das Upgrade läuft durch: mit
+  `pg_upgrade` allein und über CNPG auf einem amd64-Cluster (17.11ee1.4.7 →
+  18.6ee1.5.5, gleicher Fingerprint, kein Klartext auf Disk, siehe T13). Mit
   `--set-char-signedness` tritt der Fehler auch auf amd64 auf. Den Bug an
   CYBERTEC melden (bugs-ee@cybertec.at). Bis zum Fix gilt: auf amd64 das
-  In-place-Upgrade erst auf einem Testcluster mit `verify-tde.sh` prüfen, auf
+  In-place-Upgrade vorher auf einem Testcluster mit T13 prüfen und davor ein
+  frisches Backup ziehen (nach Erfolg gibt es nur noch Restore, kein Zurück), auf
   arm64 per `bootstrap.initdb.import` in einen neuen Cluster mit demselben
   Secret umziehen. Scheitert ein In-place-Upgrade, `imageName` bzw. den Katalog
   auf die alte Major-Version zurücksetzen. Im Modus `key-manager` erzeugt
