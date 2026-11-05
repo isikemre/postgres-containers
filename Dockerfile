@@ -7,6 +7,8 @@ ARG PG_MAJOR
 # apt.postgresql.org. "ee" installs CYBERTEC PostgreSQL Enterprise Edition
 # (postgresql-NNee) with Transparent Data Encryption instead, see PGEE.md.
 ARG PG_EDITION=""
+# PGEE demo packages are limited to 1 GB per table; refuse them unless set.
+ARG PGEE_ALLOW_DEMO=false
 
 ENV PATH=$PATH:/usr/lib/postgresql/$PG_MAJOR/bin
 
@@ -51,7 +53,10 @@ RUN --mount=type=bind,source=pgee/bin,target=/run/pgee \
       test "$(command -v initdb)" = /usr/local/bin/initdb && \
       "/usr/lib/postgresql/${PG_MAJOR}/bin/initdb" --help | grep -q -- --encryption-key-command && \
       # pg_rewind support in pgee_key_manager starts with 2026.10
-      dpkg --compare-versions "$(dpkg-query -W -f '${Version}' pgee-key-manager)" ge 2026.10~; \
+      dpkg --compare-versions "$(dpkg-query -W -f '${Version}' pgee-key-manager)" ge 2026.10~ && \
+      if dpkg-query -W -f '${Version}' "postgresql-${PG_MAJOR}ee" | grep -q '~demo' && [ "${PGEE_ALLOW_DEMO}" != true ]; then \
+        echo "PGEE demo packages (1 GB per table limit) found; use the pgee repository or set PGEE_ALLOW_DEMO=true for tests" >&2; exit 1; \
+      fi; \
     fi
 
 RUN usermod -u 26 postgres
