@@ -70,13 +70,29 @@ Die Variablen heißen `TDE_*` und nicht `PGEE_*`: Der CNPG-Webhook lehnt in
 Weitere Variablen, die das Backend liest (`VAULT_ADDR`, `VAULT_CACERT`,
 Conjur-, Azure- oder KMIP-Parameter), kommen ebenfalls aus `spec.env`.
 
-**`file`**, Beispiel: [`pgee/examples/cluster-secret-key.yaml`](pgee/examples/cluster-secret-key.yaml)
+**`file`** (empfohlen für air-gapped Umgebungen), Beispiel:
+[`pgee/examples/cluster-secret-key.yaml`](pgee/examples/cluster-secret-key.yaml)
 Der DEK liegt als Kubernetes-Secret vor, alle Pods mounten dasselbe. Das ist
-am einfachsten und braucht keinen externen Dienst, passt also gut zu
-air-gapped Umgebungen. Der Schutz hängt am Secret-Store, also
-etcd-Verschlüsselung und RBAC. Backups enthalten keinen Schlüssel. Der DEK
-lässt sich nicht rotieren und muss außerhalb des Clusters hinterlegt werden
-(Key Escrow): Geht er verloren, sind die Datenbank und alle Backups weg.
+am einfachsten und braucht keinen externen Dienst. Backups enthalten keinen
+Schlüssel. Regeln für den Betrieb:
+
+- **Key Escrow:** Den Schlüssel einmal erzeugen (`openssl rand -hex 32`) und
+  sofort außerhalb von Kubernetes hinterlegen, z. B. im Passwort-Safe oder
+  HSM. Geht er verloren, sind die Datenbank und alle Backups weg.
+- **Secret `immutable: true`:** Eine Änderung fiele sonst erst beim nächsten
+  Pod-Neustart auf, wenn die Instanz nicht mehr startet. Das Secret gehört
+  nicht dem Cluster und wird beim Löschen des Clusters nicht mit entfernt.
+  So soll es auch bleiben.
+- **Restore und DR:** Jeder Restore- oder Replica-Cluster braucht dasselbe
+  Secret in seinem Namespace, auch in einem zweiten Kubernetes-Cluster.
+- **Schutz:** Der Schutz hängt am Secret-Store. Prüfen, ob etcd Secrets
+  verschlüsselt ablegt (EncryptionConfiguration), und
+  `get secrets` sowie `pods/exec` im Namespace eng per RBAC vergeben.
+  Wer eines davon darf, kann den Schlüssel lesen.
+- **GitOps:** Den Schlüssel nie im Klartext ins Git legen, sondern z. B. über
+  Sealed Secrets, SOPS oder External Secrets.
+- **Keine Rotation:** Der DEK lässt sich nicht rotieren. Ist er kompromittiert,
+  hilft nur ein neuer Cluster mit neuem Schlüssel per `bootstrap.initdb.import`.
 
 **`key-manager`**, Beispiel: [`pgee/examples/cluster-vault.yaml`](pgee/examples/cluster-vault.yaml)
 `pgee_key_manager` erzeugt den DEK beim `initdb` und legt ihn verschlüsselt
