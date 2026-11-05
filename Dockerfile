@@ -3,20 +3,56 @@ FROM $BASE AS minimal
 
 ARG PG_VERSION
 ARG PG_MAJOR
+# PostgreSQL edition. Empty (the default) installs the community packages from
+# apt.postgresql.org. "ee" installs CYBERTEC PostgreSQL Enterprise Edition
+# (postgresql-NNee) with Transparent Data Encryption instead, see PGEE.md.
+ARG PG_EDITION=""
 
 ENV PATH=$PATH:/usr/lib/postgresql/$PG_MAJOR/bin
 
-RUN apt-get update && \
+# An optional extra APT repository (required for PG_EDITION=ee) is passed as
+# BuildKit secrets, so neither its definition nor its credentials end up in
+# the image:
+#   apt_sources  deb822 .sources file; @VERSION_CODENAME@ becomes the distro
+#   apt_auth     apt auth.conf (machine/login/password)
+#   apt_keyring  ASCII-armoured signing key, /etc/apt/keyrings/custom.asc
+RUN --mount=type=secret,id=apt_sources,required=false \
+    --mount=type=secret,id=apt_auth,required=false,target=/etc/apt/auth.conf.d/custom.conf \
+    --mount=type=secret,id=apt_keyring,required=false,target=/etc/apt/keyrings/custom.asc,mode=0444 \
+    if [ -n "${PG_EDITION}" ] && [ ! -f /run/secrets/apt_sources ]; then \
+      echo "PG_EDITION=${PG_EDITION} needs the apt_sources build secret" >&2; exit 1; \
+    fi && \
+    apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends postgresql-common ca-certificates gnupg && \
-    /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y -c "${PG_MAJOR}" && \
+    if [ -z "${PG_EDITION}" ]; then /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y -c "${PG_MAJOR}"; fi && \
+    if [ -f /run/secrets/apt_sources ]; then \
+      . /etc/os-release && \
+      sed "s/@VERSION_CODENAME@/${VERSION_CODENAME}/g" /run/secrets/apt_sources > /etc/apt/sources.list.d/custom.sources && \
+      apt-get update; \
+    fi && \
     apt-get install -y --no-install-recommends -o Dpkg::::="--force-confdef" -o Dpkg::::="--force-confold" postgresql-common && \
     sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf && \
     apt-get install -y --no-install-recommends \
       libsasl2-modules libldap-common \
-      -o Dpkg::::="--force-confdef" -o Dpkg::::="--force-confold" "postgresql-${PG_MAJOR}=${PG_VERSION}*" && \
+      -o Dpkg::::="--force-confdef" -o Dpkg::::="--force-confold" "postgresql-${PG_MAJOR}${PG_EDITION}=${PG_VERSION}*" \
+      $([ "${PG_EDITION}" = ee ] && echo pgee-key-manager) && \
+    rm -f /etc/apt/sources.list.d/custom.sources && \
     apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false && \
     rm -rf /var/lib/apt/lists/* /var/cache/* /var/log/*
+
+# PGEE only: every cluster created by this image is encrypted (see PGEE.md).
+# The initdb wrapper in /usr/local/bin comes before the real one in PATH.
+RUN --mount=type=bind,source=pgee/bin,target=/run/pgee \
+    if [ "${PG_EDITION}" = ee ]; then \
+      sed "s|@PG_BINDIR@|/usr/lib/postgresql/${PG_MAJOR}/bin|g" /run/pgee/initdb > /usr/local/bin/initdb && \
+      install -m 0755 /run/pgee/pgee-tde-key /usr/local/bin/pgee-tde-key && \
+      chmod 0755 /usr/local/bin/initdb && \
+      test "$(command -v initdb)" = /usr/local/bin/initdb && \
+      "/usr/lib/postgresql/${PG_MAJOR}/bin/initdb" --help | grep -q -- --encryption-key-command && \
+      # pg_rewind support in pgee_key_manager starts with 2026.10
+      dpkg --compare-versions "$(dpkg-query -W -f '${Version}' pgee-key-manager)" ge 2026.10~; \
+    fi
 
 RUN usermod -u 26 postgres
 USER 26
@@ -26,8 +62,16 @@ FROM minimal AS standard
 ARG EXTENSIONS
 ARG STANDARD_ADDITIONAL_POSTGRES_PACKAGES
 USER root
-RUN apt-get update && \
+RUN --mount=type=secret,id=apt_sources,required=false \
+    --mount=type=secret,id=apt_auth,required=false,target=/etc/apt/auth.conf.d/custom.conf \
+    --mount=type=secret,id=apt_keyring,required=false,target=/etc/apt/keyrings/custom.asc,mode=0444 \
+    if [ -f /run/secrets/apt_sources ]; then \
+      . /etc/os-release && \
+      sed "s/@VERSION_CODENAME@/${VERSION_CODENAME}/g" /run/secrets/apt_sources > /etc/apt/sources.list.d/custom.sources; \
+    fi && \
+    apt-get update && \
     apt-get install -y --no-install-recommends locales-all ${STANDARD_ADDITIONAL_POSTGRES_PACKAGES} ${EXTENSIONS} && \
+    rm -f /etc/apt/sources.list.d/custom.sources && \
     apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false && \
     rm -rf /var/lib/apt/lists/* /var/cache/* /var/log/*
 

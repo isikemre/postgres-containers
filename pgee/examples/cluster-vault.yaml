@@ -1,0 +1,52 @@
+# PGEE cluster using CYBERTEC pgee_key_manager with HashiCorp Vault / OpenBao.
+# initdb generates the data encryption key (DEK); it is stored encrypted in
+# $PGDATA/tdekey.json, the password protecting it in Vault (KV v2). Replicas
+# and backups carry tdekey.json, so every instance and every restore needs
+# read access to the same Vault path. Never delete old KV versions: older
+# backups reference them.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pgee-vault
+spec:
+  instances: 3
+  imageName: registry.example.com/db/postgresql-ee:17-minimal-trixie
+
+  bootstrap:
+    initdb:
+      dataChecksums: true
+
+  env:
+    - name: TDE_KEY_SOURCE
+      value: key-manager
+    - name: TDE_KEY_MANAGER_ARGS
+      # Keep the path stable and explicit: a restored cluster under another
+      # name must point to the path of its source.
+      value: "-vault -vault-mount pgee -vault-path db/pgee-vault"
+    - name: VAULT_ADDR
+      value: https://vault.example.com:8200
+    - name: VAULT_CACERT
+      value: /projected/vault/ca.crt
+    - name: VAULT_TOKEN_FILE
+      value: /projected/vault/token
+    - name: TDE_KEY_BITS   # never change it after the bootstrap
+      value: "256"
+
+  projectedVolumeTemplate:
+    defaultMode: 0440
+    sources:
+      - secret:
+          # Vault token with a policy allowing create/read/update on
+          # pgee/data/db/pgee-vault and read on its metadata.
+          name: pgee-vault-token
+          items:
+            - key: token
+              path: vault/token
+      - configMap:
+          name: vault-ca
+          items:
+            - key: ca.crt
+              path: vault/ca.crt
+
+  storage:
+    size: 10Gi

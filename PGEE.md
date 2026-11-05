@@ -1,0 +1,195 @@
+# CYBERTEC PGEE mit TDE als CloudNativePG-Operand
+
+Dieser Fork baut neben den Community-Images optional Images mit
+[CYBERTEC PostgreSQL Enterprise Edition](https://deb.cybertec-postgresql.com/)
+(PGEE). Jeder Cluster, den ein solches Image anlegt, ist mit Transparent Data
+Encryption (TDE) verschlüsselt. Am CloudNativePG-Operator ändert sich nichts.
+
+Ohne `pgEdition` baut das Repo exakt die Upstream-Images. Die EE-Variante wird
+mit `pgEdition=ee` eingeschaltet.
+
+## TDE, `-K` und Replicas
+
+PGEE verschlüsselt Datenfiles **und** WAL mit einem Data Encryption Key (DEK).
+`initdb -K <befehl>` legt einen verschlüsselten Cluster an und schreibt
+`encryption_key_command = '<befehl>'` in die `postgresql.conf`. Ab dann holt
+jeder Prozess, der den Schlüssel braucht, ihn über diesen Befehl.
+
+`-K` braucht es also nur **ein einziges Mal**, beim `initdb` des ersten Primary.
+Physische Replicas müssen denselben DEK haben wie der Primary, weil sie das
+verschlüsselte WAL abspielen. Daraus folgt die eine Regel, auf die es ankommt:
+
+> Der Key-Command muss auf jeder Instanz, in jedem Job-Pod und in jedem
+> Restore **denselben** Schlüssel liefern. Er darf nie pro Pod einen neuen
+> erzeugen.
+
+| CNPG-Vorgang | Was passiert | TDE |
+|---|---|---|
+| `bootstrap.initdb` | CNPG ruft `initdb` über den PATH auf, der Wrapper im Image ergänzt `-K /usr/local/bin/pgee-tde-key --key-bits` | Cluster wird verschlüsselt angelegt, der Key-Command landet in der `postgresql.conf` |
+| Start | `postgres` liest `encryption_key_command` | Key-Command liefert den DEK |
+| Replica (`join`), Scale-out | `pg_basebackup` kopiert PGDATA samt `postgresql.conf` (und `tdekey.json`) | Kein `-K` nötig, die Replica holt denselben DEK aus derselben Quelle |
+| Switchover/Failover | CNPG ruft `pg_rewind` ohne `-K` auf | PGEE-`pg_rewind` liest `encryption_key_command` selbst aus der Ziel-`postgresql.conf`, kein Wrapper nötig |
+| Backup (Barman Cloud Plugin) | Dateien und WAL werden roh kopiert | Liegen verschlüsselt im Object Store |
+| Restore, `bootstrap.pg_basebackup`, Replica-Cluster | Physische Kopie | Braucht Zugriff auf **denselben** Schlüssel wie die Quelle, sonst `FATAL: invalid encryption key` |
+
+Weil `-K` im Image steckt, braucht es kein deprecated
+`bootstrap.initdb.options`. `dataChecksums` und die übrigen `initdb`-Felder
+bleiben damit nutzbar.
+
+## Was im Image steckt
+
+Nur bei `PG_EDITION=ee`:
+
+- `postgresql-NNee` und `pgee-key-manager` (mindestens 2026.10, prüft der Build)
+  aus dem CYBERTEC-Repo. Das PGDG-Repo wird dann nicht eingebunden. Die
+  Extensions im `standard`-Image (pgaudit, pgvector, pg-failover-slots, JIT bei
+  18) kommen gleichnamig von CYBERTEC und sind gegen EE gebaut.
+- [`/usr/local/bin/initdb`](pgee/bin/initdb): ergänzt `-K` und `--key-bits`.
+  Lässt `--sync-only` und ein selbst übergebenes `-K` unverändert durch. Ein
+  Opt-out gibt es nicht.
+- [`/usr/local/bin/pgee-tde-key`](pgee/bin/pgee-tde-key): der Key-Command.
+  Woher der Schlüssel kommt, steuern Env-Variablen in der Cluster-Spec.
+
+Der Typ `system` (Barman Cloud aus PyPI, deprecated) wird für EE nicht gebaut.
+Für Backups ist das
+[Barman Cloud Plugin](https://cloudnative-pg.io/plugin-barman-cloud/) gedacht.
+
+## Schlüsselquelle zur Laufzeit
+
+Die Variablen heißen `TDE_*` und nicht `PGEE_*`: Der CNPG-Webhook lehnt in
+`spec.env` alles ab, was mit `PG` oder `CNPG_` beginnt.
+
+| Variable | Bedeutung |
+|---|---|
+| `TDE_KEY_SOURCE` | `file` oder `key-manager`, Pflicht (fail-closed) |
+| `TDE_KEY_FILE` | `file`: Pfad zum Hex-DEK, typischerweise ein Secret unter `/projected` |
+| `TDE_KEY_MANAGER_ARGS` | `key-manager`: Backend-Flags für `pgee_key_manager`, z. B. `-vault -vault-mount pgee -vault-path db/pgee-vault` |
+| `VAULT_TOKEN_FILE` | `key-manager`: optional, wird bei jedem Aufruf nach `VAULT_TOKEN` gelesen |
+| `TDE_KEY_BITS` | 128, 192 oder 256, Default 256. Nach dem Bootstrap nie mehr ändern |
+
+Weitere Variablen, die das Backend liest (`VAULT_ADDR`, `VAULT_CACERT`,
+Conjur-, Azure- oder KMIP-Parameter), kommen ebenfalls aus `spec.env`.
+
+**`file`**, Beispiel: [`pgee/examples/cluster-secret-key.yaml`](pgee/examples/cluster-secret-key.yaml)
+Der DEK liegt als Kubernetes-Secret vor, alle Pods mounten dasselbe. Das ist
+am einfachsten und braucht keinen externen Dienst, passt also gut zu
+air-gapped Umgebungen. Der Schutz hängt am Secret-Store, also
+etcd-Verschlüsselung und RBAC. Backups enthalten keinen Schlüssel. Der DEK
+lässt sich nicht rotieren und muss außerhalb des Clusters hinterlegt werden
+(Key Escrow): Geht er verloren, sind die Datenbank und alle Backups weg.
+
+**`key-manager`**, Beispiel: [`pgee/examples/cluster-vault.yaml`](pgee/examples/cluster-vault.yaml)
+`pgee_key_manager` erzeugt den DEK beim `initdb` und legt ihn verschlüsselt
+in `$PGDATA/tdekey.json` ab. Das Passwort dazu liegt in Vault/OpenBao (KV v2),
+alternativ wird der DEK über Conjur, KMIP oder Cloud-KMS gewrappt.
+`tdekey.json` reist mit `pg_basebackup` und mit jedem Backup mit, deshalb
+brauchen Replicas und Restores nur Zugriff auf denselben Vault-Pfad. Der KEK
+lässt sich rotieren (`-rotate`). Alte Vault-Versionen dürfen nie gelöscht
+werden, weil ältere Backups sie referenzieren. `-rotate` schreibt
+`tdekey.json` nur auf der Instanz neu, auf der es läuft.
+
+> Ohne Backend-Flags (`TDE_KEY_MANAGER_ARGS` leer) schützt `pgee_key_manager`
+> den DEK intern (`"method":"local"`). Dann enthält jedes Backup einen
+> benutzbaren Schlüssel. Das ist nur für Tests geeignet.
+
+Ist die Schlüsselquelle nicht erreichbar, startet eine Instanz nicht, sie
+landet im CrashLoop. Laufende Instanzen arbeiten weiter.
+
+## Build
+
+Für das CYBERTEC-Repo gibt es drei BuildKit-Secrets. Keines davon landet im
+Image:
+
+| Bake-Variable | Secret | Inhalt |
+|---|---|---|
+| `aptSources` | `apt_sources` | deb822-Datei, Vorlage: [`pgee/apt/cybertec.sources.example`](pgee/apt/cybertec.sources.example). `@VERSION_CODENAME@` wird durch die Distro ersetzt |
+| `aptAuth` | `apt_auth` | Zugangsdaten, Vorlage: [`pgee/apt/auth.conf.example`](pgee/apt/auth.conf.example) |
+| `aptKeyring` | `apt_keyring` | ASCII-armored Signierschlüssel, z. B. [cybertec-deb.asc](https://deb.cybertec-postgresql.com/assets/cybertec-deb.asc) |
+
+Für air-gapped Umgebungen:
+
+| Bake-Variable | Wirkung |
+|---|---|
+| `httpProxy`, `httpsProxy`, `noProxy` | Werden als `http_proxy`/`HTTP_PROXY` usw. an apt und pip im Build gereicht. Nicht gesetzt heißt nicht übergeben, ein Proxy aus `~/.docker/config.json` greift dann weiter |
+| `baseImagePrefix` | Wird vor das Debian-Basisimage gesetzt, z. B. `registry.example.com/dockerhub/`, um über einen Registry-Mirror zu ziehen |
+
+Proxy-Werte stehen mit `mode=max` in der Provenance-Attestation, deshalb keine
+Zugangsdaten in die Proxy-URL schreiben. Die BuildKit-Instanz selbst braucht
+den Proxy separat, wenn sie Basisimages direkt zieht, etwa über
+`docker buildx create --driver-opt env.https_proxy=...`.
+
+Die Secret-Dateien am besten unter `_pgee/` im Repo ablegen. Dieser Pfad ist
+per `.gitignore` (`_*/`) ausgeschlossen, und Bake verlangt für Dateien
+innerhalb des Repos kein `--allow=fs.read`.
+
+```bash
+pgEdition=ee \
+environment=production \
+registry=registry.example.com/db \
+aptSources=_pgee/cybertec.sources \
+aptAuth=_pgee/auth.conf \
+aptKeyring=_pgee/cybertec-deb.asc \
+httpProxy=http://proxy.example.com:3128 \
+httpsProxy=http://proxy.example.com:3128 \
+baseImagePrefix=registry.example.com/dockerhub/ \
+  docker buildx bake --push postgresql-17-minimal-trixie
+```
+
+Das erzeugt `registry.example.com/db/postgresql-ee:17-minimal-trixie`,
+`:17.11-minimal-trixie` und einen Tag mit Zeitstempel. Die EE-Versionen stehen
+in `pgeeVersions` in der [`docker-bake.hcl`](docker-bake.hcl). Sie folgen dem
+CYBERTEC-Repo, nicht `postgreSQLVersions`. Das Image ist lizenzpflichtig und
+gehört nur in eine private Registry, nie in die öffentliche GitHub-CI dieses
+Forks.
+
+## Testen
+
+- [`pgee/test/smoke-local.sh`](pgee/test/smoke-local.sh) testet ein Image ohne
+  Kubernetes: initdb über den Wrapper, eine Replica, Split-Brain mit
+  `pg_rewind`.
+- [`pgee/test/verify-tde.sh`](pgee/test/verify-tde.sh) `<cluster>` ist der
+  Abnahmetest gegen einen laufenden CNPG-Cluster: Verschlüsselung und gleicher
+  Key-Fingerprint auf allen Instanzen, kein Klartext auf Disk, Switchover,
+  harter Failover, Scale-out. Er ist destruktiv und nur für Testcluster
+  gedacht.
+
+Stand 05.11.2026 mit den PGEE-Demo-Paketen (17.11ee1.4.7, 18.6ee1.5.5,
+pgee-key-manager 2026.10.06), linux/arm64, CloudNativePG 1.30.1 in kind,
+jeweils mit `file` und mit `key-manager` + Vault:
+
+- Bootstrap mit 3 Instanzen: alle verschlüsselt, ein Fingerprint, `tdekey.json`
+  auf den Replicas
+- Kein Klartext in Heap-File und WAL
+- Switchover und harter Failover. CNPG führt `pg_rewind` aus,
+  `pgee_key_manager` liest dabei aus Vault (Security-Context-Check akzeptiert)
+- `pg_rewind` mit echter Divergenz (lokal)
+- Scale-out 3 → 4: Die neue Replica hat denselben Key
+- `bootstrap.pg_basebackup`-Klon: läuft mit demselben Key, scheitert mit einem
+  anderen
+- Vault-Token ungültig: Ein Replica-Neustart scheitert, der Primary läuft
+  weiter, nach Korrektur erholt sich die Replica
+- Build über einen HTTP-Proxy (Debian per HTTP, CYBERTEC per CONNECT)
+
+Nicht getestet:
+
+- Backup und Restore über das Barman Cloud Plugin
+- amd64
+- die Vollversion aus dem `pgee`-Repo mit `aptAuth`
+- KEK-Rotation
+- In-place-Major-Upgrade
+
+## Grenzen
+
+- **Kein offiziell unterstützter Pfad.** CNPG garantiert nur
+  PostgreSQL-Versionen der PGDG. CYBERTEC bietet TDE auf Kubernetes über den
+  eigenen Operator an. Eine Supportaussage von CYBERTEC für PGEE als
+  CNPG-Operand sollte vor der Produktion schriftlich vorliegen.
+- **Bestehende Cluster ohne TDE** lassen sich nicht nachträglich
+  verschlüsseln. Sie werden logisch umgezogen, z. B. in einen neuen Cluster
+  mit `bootstrap.initdb.import` (läuft über `initdb`, also verschlüsselt) oder
+  per logischer Replikation.
+- **Major-Upgrade in-place** (CNPG `pg_upgrade`): nicht getestet. Der Wrapper
+  legt dabei für das neue Datenverzeichnis einen neuen Schlüssel an. Bis das
+  geklärt ist, das Upgrade logisch per Import durchführen.
+- **DEK-Rotation** unterstützt PGEE nicht, rotierbar ist nur der KEK im Modus
+  `key-manager`.

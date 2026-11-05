@@ -1,0 +1,5 @@
+# apt credentials for the CYBERTEC repository, passed to the build as the
+# apt_auth secret (bake variable aptAuth). Never commit the real file.
+machine deb.cybertec-postgresql.com
+login YOUR_LOGIN
+password YOUR_PASSWORD

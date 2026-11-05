@@ -1,0 +1,76 @@
+#!/bin/sh
+# encryption_key_command of every cluster created from a PGEE image.
+#
+# initdb writes this path into postgresql.conf. postgres, initdb and
+# pg_rewind run it whenever they need the data encryption key (DEK), and it
+# prints the DEK as hex on stdout. All instances of a cluster (the primary,
+# every replica, every restore of its backups) must get the SAME key, so the
+# DEK is never generated per pod. Where it comes from is chosen with the
+# Cluster's spec.env:
+#
+#   TDE_KEY_SOURCE=file
+#     TDE_KEY_FILE   file holding the hex DEK, typically a Kubernetes
+#                         Secret mounted through projectedVolumeTemplate.
+#
+#   TDE_KEY_SOURCE=key-manager
+#     CYBERTEC pgee_key_manager generates the DEK during initdb and keeps it
+#     wrapped in $PGDATA/tdekey.json. That file travels with pg_basebackup and
+#     with backups, so replicas and restores find it. The wrapping secret
+#     lives in an external key service:
+#     TDE_KEY_MANAGER_ARGS  backend flags, e.g.
+#                            "-vault -vault-mount pgee -vault-path db/cluster"
+#                            Empty means the key manager protects the DEK
+#                            internally: never use that in production, since
+#                            every backup would then carry a usable key.
+#     VAULT_TOKEN_FILE       optional, read into VAULT_TOKEN on every call.
+#     Any other variable the backend reads (VAULT_ADDR, VAULT_CACERT, ...)
+#     comes from spec.env as well.
+#
+#   TDE_KEY_BITS     128, 192 or 256 (default 256). Fixed for the life
+#                         of a cluster; must match what initdb used.
+#
+# CloudNativePG reserves every variable starting with PG or CNPG_ for itself,
+# hence the TDE_ prefix. Never write the key or credentials to stderr: it ends
+# up in the pod log.
+set -eu
+umask 077
+
+die() {
+	echo "pgee-tde-key: $*" >&2
+	exit 1
+}
+
+bits=${TDE_KEY_BITS:-256}
+case $bits in
+128 | 192 | 256) ;;
+*) die "invalid TDE_KEY_BITS=$bits (128, 192 or 256)" ;;
+esac
+
+case ${TDE_KEY_SOURCE:-} in
+file)
+	[ -n "${TDE_KEY_FILE:-}" ] || die "TDE_KEY_FILE is not set"
+	[ -r "$TDE_KEY_FILE" ] || die "cannot read $TDE_KEY_FILE"
+	key=$(tr -d '[:space:]' <"$TDE_KEY_FILE")
+	case $key in
+	'' | *[!0-9a-fA-F]*) die "$TDE_KEY_FILE does not contain a hex key" ;;
+	esac
+	[ ${#key} -eq $((bits / 4)) ] ||
+		die "$TDE_KEY_FILE must hold $((bits / 4)) hex characters for $bits bit"
+	printf '%s\n' "$key"
+	;;
+key-manager)
+	if [ -z "${VAULT_TOKEN:-}" ] && [ -n "${VAULT_TOKEN_FILE:-}" ]; then
+		[ -r "$VAULT_TOKEN_FILE" ] || die "cannot read $VAULT_TOKEN_FILE"
+		VAULT_TOKEN=$(cat "$VAULT_TOKEN_FILE")
+		export VAULT_TOKEN
+	fi
+	# CloudNativePG sets PGDATA in the pod; the initdb wrapper exports the
+	# directory it creates. postgres also runs this inside the data directory.
+	tdekey=${PGDATA:-$PWD}/tdekey.json
+	# shellcheck disable=SC2086 # TDE_KEY_MANAGER_ARGS is a list of flags
+	exec pgee_key_manager -tdekey-file "$tdekey" -key-bits "$bits" \
+		${TDE_KEY_MANAGER_ARGS:-}
+	;;
+'') die "TDE_KEY_SOURCE is not set (file or key-manager)" ;;
+*) die "unknown TDE_KEY_SOURCE=$TDE_KEY_SOURCE (file or key-manager)" ;;
+esac

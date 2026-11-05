@@ -1,0 +1,50 @@
+#!/bin/sh
+# initdb wrapper, installed in PGEE images only.
+#
+# CloudNativePG runs "initdb" through PATH (bootstrap.initdb and the major
+# upgrade job). This wrapper makes every new cluster encrypted with PGEE
+# Transparent Data Encryption: it adds -K and --key-bits, so no
+# bootstrap.initdb.options are needed. initdb then stores the key command in
+# postgresql.conf. Replicas (pg_basebackup), restores and pg_rewind take it
+# from there, so they need no wrapper. There is no opt-out: an unencrypted
+# cluster needs a different image.
+set -eu
+
+real=@PG_BINDIR@/initdb
+keybits=${TDE_KEY_BITS:-256}
+
+pgdata=${PGDATA:-}
+prev=
+for arg in "$@"; do
+	case $prev in
+	-D | --pgdata) pgdata=$arg ;;
+	esac
+	case $arg in
+	# Not creating a cluster, or the caller brings its own key command.
+	-S | --sync-only | -s | --show | -V | --version | '-?' | --help | \
+		-K | --encryption-key-command | --encryption-key-command=*)
+		exec "$real" "$@"
+		;;
+	--pgdata=*) pgdata=${arg#--pgdata=} ;;
+	-D?*) pgdata=${arg#-D} ;;
+	esac
+	prev=$arg
+done
+
+case $keybits in
+128 | 192 | 256) ;;
+*)
+	echo "initdb: invalid TDE_KEY_BITS=$keybits (128, 192 or 256)" >&2
+	exit 1
+	;;
+esac
+
+# The key command locates tdekey.json through PGDATA. Point it at the
+# directory being created, which differs from the pod's PGDATA during a
+# major upgrade.
+if [ -n "$pgdata" ]; then
+	export PGDATA="$pgdata"
+fi
+
+exec "$real" --encryption-key-command=/usr/local/bin/pgee-tde-key \
+	--key-bits="$keybits" "$@"
