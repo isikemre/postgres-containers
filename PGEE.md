@@ -188,8 +188,8 @@ jeweils mit `file` und mit `key-manager` + Vault:
 - Vault-Token ungültig: Ein Replica-Neustart scheitert, der Primary läuft
   weiter, nach Korrektur erholt sich die Replica
 - Build über einen HTTP-Proxy (Debian per HTTP, CYBERTEC per CONNECT)
-- Major-Upgrade 17 → 18 in-place (CNPG `pg_upgrade`): **scheitert**, siehe
-  unten. Rollback auf das 17er-Image stellt den Cluster wieder her
+- Major-Upgrade 17 → 18 in-place (CNPG `pg_upgrade`) auf arm64: **scheitert**,
+  siehe unten. Rollback auf das 17er-Image stellt den Cluster wieder her
 - Major-Upgrade 17 → 18 per `bootstrap.initdb.import` in einen neuen Cluster
   mit demselben Secret: funktioniert, verschlüsselt
 
@@ -211,15 +211,22 @@ Nicht getestet:
   mit `bootstrap.initdb.import` (läuft über `initdb`, also verschlüsselt) oder
   per logischer Replikation.
 - **Major-Upgrade in-place** (CNPG `pg_upgrade`, ausgelöst durch ein Image mit
-  höherer Major-Version) funktioniert mit 18.6ee1.5.5 nicht. Das
-  PGEE-`pg_upgrade` ruft `pg_resetwal --char-signedness` ohne Schlüssel auf
-  (`could not read encryption key from stdin`), auch mit `-K` und auch ohne
-  CNPG. Das ist ein Bug für CYBERTEC (bugs-ee@cybertec.at). Bis zum Fix
-  Major-Upgrades per `bootstrap.initdb.import` in einen neuen Cluster mit
-  demselben Secret durchführen. Geht ein In-place-Upgrade versehentlich los,
-  `imageName` bzw. den Katalog auf die alte Major-Version zurücksetzen. Im Modus
-  `key-manager` erzeugt `initdb` für das neue Datenverzeichnis zudem einen neuen
-  DEK, ein In-place-Upgrade wäre dort auch nach dem Fix nicht möglich.
+  höherer Major-Version) auf PG 18: In PGEE (18.3ee bis 18.6ee1.5.5) steckt ein
+  Bug. `pg_upgrade` gibt den Schlüssel allen `pg_resetwal`-Aufrufen über stdin
+  mit, nur dem Aufruf `pg_resetwal --char-signedness` nicht. Der scheitert dann
+  mit `could not read encryption key from stdin`, auch mit `-K` und auch ohne
+  CNPG. Ob dieser Aufruf überhaupt stattfindet, hängt an der Plattform: Auf
+  arm64 bei Quellversionen vor 18 ja, dort scheitert das Upgrade. Auf amd64
+  wird der Schritt übersprungen, und das Upgrade läuft durch (gegengeprüft mit
+  `pg_upgrade` allein, der CNPG-Weg auf amd64 ist nicht getestet). Mit
+  `--set-char-signedness` tritt der Fehler auch auf amd64 auf. Den Bug an
+  CYBERTEC melden (bugs-ee@cybertec.at). Bis zum Fix gilt: auf amd64 das
+  In-place-Upgrade erst auf einem Testcluster mit `verify-tde.sh` prüfen, auf
+  arm64 per `bootstrap.initdb.import` in einen neuen Cluster mit demselben
+  Secret umziehen. Scheitert ein In-place-Upgrade, `imageName` bzw. den Katalog
+  auf die alte Major-Version zurücksetzen. Im Modus `key-manager` erzeugt
+  `initdb` für das neue Datenverzeichnis zudem einen neuen DEK, dort wäre ein
+  In-place-Upgrade auch nach dem Fix nicht möglich.
 - **DEK-Rotation** unterstützt PGEE nicht, rotierbar ist nur der KEK im Modus
   `key-manager`.
 
