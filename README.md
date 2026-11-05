@@ -12,6 +12,10 @@
 
 # CNPG PostgreSQL Container Images
 
+> **Fork note:** this fork can additionally build CYBERTEC PostgreSQL
+> Enterprise Edition images with Transparent Data Encryption
+> (`pgEdition=ee`), see [PGEE.md](PGEE.md). Without it, the build is unchanged.
+
 This repository provides maintenance scripts for generating
 **immutable application containers** for all supported
 [PostgreSQL major versions](https://www.postgresql.org/support/versioning/):

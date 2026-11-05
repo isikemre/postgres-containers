@@ -15,7 +15,48 @@ variable "revision" {
   default = ""
 }
 
-fullname = ( environment == "testing") ? "${registry}/postgresql-testing" : "${registry}/postgresql"
+// PostgreSQL edition: "" builds the community images from apt.postgresql.org,
+// "ee" builds CYBERTEC PostgreSQL Enterprise Edition images with TDE. See PGEE.md.
+variable "pgEdition" {
+  default = ""
+}
+
+// Extra APT repository, passed to the build as BuildKit secrets (never stored
+// in the image). Required for pgEdition=ee. Paths to local files:
+//   aptSources  deb822 .sources file; @VERSION_CODENAME@ is replaced by the distro
+//   aptAuth     apt auth.conf with the repository credentials (optional)
+//   aptKeyring  ASCII-armoured signing key, referenced in aptSources as
+//               Signed-By: /etc/apt/keyrings/custom.asc (optional)
+variable "aptSources" {
+  default = ""
+}
+variable "aptAuth" {
+  default = ""
+}
+variable "aptKeyring" {
+  default = ""
+}
+
+// Prepended to the base image, e.g. "registry.example.com/dockerhub/", to pull
+// it through a registry mirror.
+variable "baseImagePrefix" {
+  default = ""
+}
+
+// HTTP proxy for apt/pip inside the build. Unset values are not passed, so a
+// proxy configured in ~/.docker/config.json keeps working.
+variable "httpProxy" {
+  default = ""
+}
+variable "httpsProxy" {
+  default = ""
+}
+variable "noProxy" {
+  default = ""
+}
+
+imageName = pgEdition == "" ? "postgresql" : "postgresql-${pgEdition}"
+fullname = ( environment == "testing") ? "${registry}/${imageName}-testing" : "${registry}/${imageName}"
 now = timestamp()
 authors = "The CloudNativePG Contributors"
 url = "https://github.com/cloudnative-pg/postgres-containers"
@@ -36,6 +77,14 @@ postgreSQLPreviewVersions = [
   "19~rc1",
 ]
 
+// CYBERTEC PGEE versions to build when pgEdition = "ee". They follow the
+// CYBERTEC repository, not postgreSQLVersions above. A version is matched as
+// "postgresql-NNee=<version>*", so "17.11" picks the latest 17.11eeX.Y.Z build.
+pgeeVersions = [
+  "17.11",
+  "18.6"
+]
+
 // Barman version to build
 // renovate: datasource=pypi versioning=loose depName=barman
 barmanVersion = "3.20.1"
@@ -49,13 +98,14 @@ extensions = [
 
 target "default" {
   matrix = {
-    tgt = [
+    // PGEE images skip the deprecated "system" type (Barman Cloud from PyPI)
+    tgt = [for t in [
       "minimal",
       "standard",
       "system"
-    ]
+    ] : t if pgEdition == "" || t != "system"]
     // Get the list of PostgreSQL versions, filtering preview versions if already stable
-    pgVersion = getPgVersions(postgreSQLVersions, postgreSQLPreviewVersions)
+    pgVersion = pgEdition == "" ? getPgVersions(postgreSQLVersions, postgreSQLPreviewVersions) : pgeeVersions
     base = [
       // renovate: datasource=docker versioning=loose
       "debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4",
@@ -76,14 +126,23 @@ target "default" {
   ]
   context = "."
   target = "${tgt}"
-  args = {
+  args = merge({
     PG_VERSION = "${pgVersion}"
     PG_MAJOR = "${getMajor(pgVersion)}"
-    BASE = "${base}"
+    BASE = "${baseImagePrefix}${base}"
     EXTENSIONS = "${getExtensionsString(pgVersion, extensions)}"
     STANDARD_ADDITIONAL_POSTGRES_PACKAGES = "${getStandardAdditionalPostgresPackagesPerMajorVersion(getMajor(pgVersion))}"
     BARMAN_VERSION = "${barmanVersion}"
-  }
+    PG_EDITION = "${pgEdition}"
+  },
+  httpProxy == "" ? {} : { http_proxy = httpProxy, HTTP_PROXY = httpProxy },
+  httpsProxy == "" ? {} : { https_proxy = httpsProxy, HTTPS_PROXY = httpsProxy },
+  noProxy == "" ? {} : { no_proxy = noProxy, NO_PROXY = noProxy })
+  secret = compact([
+    aptSources == "" ? "" : "id=apt_sources,src=${aptSources}",
+    aptAuth == "" ? "" : "id=apt_auth,src=${aptAuth}",
+    aptKeyring == "" ? "" : "id=apt_keyring,src=${aptKeyring}",
+  ])
   output = [
     "type=image,oci-mediatypes=true,oci-artifact=true",
   ]
@@ -165,7 +224,7 @@ function getStandardAdditionalPostgresPackagesPerMajorVersion {
     params = [ majorVersion ]
     // Add PostgreSQL jit package from version 18
     result = join(" ", [
-      majorVersion < 18 ? "" : format("postgresql-%s-jit", majorVersion)
+      majorVersion < 18 ? "" : format("postgresql-%s%s-jit", majorVersion, pgEdition)
     ])
 }
 

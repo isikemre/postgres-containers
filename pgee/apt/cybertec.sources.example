@@ -1,0 +1,14 @@
+# deb822 source for the CYBERTEC PGEE repository, passed to the build as the
+# apt_sources secret (bake variable aptSources). @VERSION_CODENAME@ is replaced
+# with the codename of the base image (trixie, bookworm).
+#
+#   full version:  https://deb.cybertec-postgresql.com/pgee   (needs aptAuth)
+#   demo version:  https://deb.cybertec-postgresql.com/public (1 GB per table)
+#   internal mirror (Nexus, Artifactory, ...): its URL instead
+Types: deb
+URIs: https://deb.cybertec-postgresql.com/pgee
+Suites: @VERSION_CODENAME@
+Components: main
+# Key from https://deb.cybertec-postgresql.com/assets/cybertec-deb.asc,
+# passed as the apt_keyring secret (bake variable aptKeyring).
+Signed-By: /etc/apt/keyrings/custom.asc
