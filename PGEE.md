@@ -161,6 +161,27 @@ Forks.
 Demo-Pakete (`~demo`, 1 GB pro Tabelle) lehnt der Build ab. Für Tests mit dem
 `public`-Repo: `--set '*.args.PGEE_ALLOW_DEMO=true'`.
 
+Push in eine private Registry (z. B. Harbor):
+
+- Die Bake-Ausgabe (OCI-Index mit SBOM- und Provenance-Attestation) braucht
+  einen Builder mit `docker-container`-Treiber, der Standard-Treiber `docker`
+  kann sie nicht exportieren:
+  `docker buildx create --name pgee --driver docker-container --use`.
+- Bake baut standardmäßig `linux/amd64` und `linux/arm64`. Ohne QEMU auf dem
+  Build-Host nur die eigene Plattform bauen, etwa mit
+  `--set '*.platform=linux/amd64'`.
+- `docker login registry.example.com` vorher. Der Builder nimmt die
+  Zugangsdaten aus `~/.docker/config.json`.
+- Läuft der Builder mit Proxy (`--driver-opt env.https_proxy=...`), gehört die
+  Registry in `env.no_proxy`.
+- Signiert eine interne CA das Registry-Zertifikat, braucht BuildKit sie in
+  einer `buildkitd.toml` (`[registry."registry.example.com"]` mit
+  `ca = ["/etc/ssl/certs/internal-ca.pem"]`), übergeben mit
+  `docker buildx create --buildkitd-config buildkitd.toml`.
+- Im Cluster das Image per Digest referenzieren
+  (`...:17-minimal-trixie@sha256:...`). Der Digest steht in der Bake-Ausgabe
+  oder in `docker buildx imagetools inspect`.
+
 ## Testen
 
 - [`pgee/test/smoke-local.sh`](pgee/test/smoke-local.sh) testet ein Image ohne
@@ -171,10 +192,14 @@ Demo-Pakete (`~demo`, 1 GB pro Tabelle) lehnt der Build ab. Für Tests mit dem
   Key-Fingerprint auf allen Instanzen, kein Klartext auf Disk, Switchover,
   harter Failover, Scale-out. Er ist destruktiv und nur für Testcluster
   gedacht.
+- [`pgee/test/AGENT-TESTPLAN.md`](pgee/test/AGENT-TESTPLAN.md) ist der
+  vollständige Abnahmeplan T00–T13 (inklusive Klon, Backup/Restore, Import und
+  In-place-Upgrade), geschrieben für einen Agenten, der ihn in der
+  Zielumgebung abarbeitet und einen Report mit Evidenz erstellt.
 
 Stand 05.11.2026 mit den PGEE-Demo-Paketen (17.11ee1.4.7, 18.6ee1.5.5,
-pgee-key-manager 2026.10.06), linux/arm64, CloudNativePG 1.30.1 in kind,
-jeweils mit `file` und mit `key-manager` + Vault:
+pgee-key-manager 2026.10.06), linux/arm64, CloudNativePG 1.30.1 in kind und
+k3d, jeweils mit `file` und mit `key-manager` + Vault:
 
 - Bootstrap mit 3 Instanzen: alle verschlüsselt, ein Fingerprint, `tdekey.json`
   auf den Replicas
@@ -187,7 +212,12 @@ jeweils mit `file` und mit `key-manager` + Vault:
   anderen
 - Vault-Token ungültig: Ein Replica-Neustart scheitert, der Primary läuft
   weiter, nach Korrektur erholt sich die Replica
+- Backup über das Barman Cloud Plugin (RustFS als S3) und Restore in einen
+  neuen Cluster mit demselben Secret: verschlüsselt, gleicher Fingerprint,
+  WAL nach dem Backup wird eingespielt
 - Build über einen HTTP-Proxy (Debian per HTTP, CYBERTEC per CONNECT)
+- `docker buildx bake --push` mit Standard-Ausgabe (OCI-Index, SBOM,
+  Provenance) in eine Registry, Pull per Digest durch k3d
 - Major-Upgrade 17 → 18 in-place (CNPG `pg_upgrade`) auf arm64: **scheitert**,
   siehe unten. Rollback auf das 17er-Image stellt den Cluster wieder her
 - Major-Upgrade 17 → 18 per `bootstrap.initdb.import` in einen neuen Cluster
@@ -195,7 +225,6 @@ jeweils mit `file` und mit `key-manager` + Vault:
 
 Nicht getestet:
 
-- Backup und Restore über das Barman Cloud Plugin
 - amd64
 - die Vollversion aus dem `pgee`-Repo mit `aptAuth`
 - KEK-Rotation

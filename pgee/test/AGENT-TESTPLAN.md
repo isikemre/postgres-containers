@@ -471,8 +471,11 @@ EOF
 retry 1200 sh -c "[ \"\$(kubectl -n $TEST_NS get backup $SRC-backup -o jsonpath='{.status.phase}')\" = completed ]" ||
 	fail "backup did not complete, phase: $(k get backup "$SRC-backup" -o jsonpath='{.status.phase}')"
 echo "backup completed"
-sql "$SRC-1" "insert into keep select 'after-backup' from generate_series(1,10); select pg_switch_wal();" app >/dev/null
-sleep 60
+# separate calls: one psql -c is one transaction, the switch must follow the commit
+sql "$SRC-1" "insert into keep select 'after-backup' from generate_series(1,10)" app >/dev/null
+seg=$(sql "$SRC-1" "select pg_walfile_name(pg_switch_wal())")
+retry 300 sh -c "kubectl -n $TEST_NS exec $SRC-1 -c postgres -- psql -XAtq -c \"select last_archived_wal >= '$seg' from pg_stat_archiver\" | grep -qx t" ||
+	fail "WAL segment $seg was not archived"
 cat >"$W/snip-rst.yaml" <<EOF
   bootstrap:
     recovery:
